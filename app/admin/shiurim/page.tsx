@@ -139,6 +139,13 @@ export default function AdminShiurimPage() {
   const [newRebbe, setNewRebbe] = useState("")
   const [newTag, setNewTag] = useState("")
   const [newSeries, setNewSeries] = useState("")
+
+  // Inline edit state for renaming options
+  const [editingRebbe, setEditingRebbe] = useState<string | null>(null)
+  const [editingTag, setEditingTag] = useState<string | null>(null)
+  const [editingSeries, setEditingSeries] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState("")
+  const [renaming, setRenaming] = useState(false)
   const [showAddRebbe, setShowAddRebbe] = useState(false)
   const [showAddTag, setShowAddTag] = useState(false)
   const [showAddSeries, setShowAddSeries] = useState(false)
@@ -253,6 +260,168 @@ export default function AdminShiurimPage() {
     setSeriesOptions(updated)
     await saveOptions(rebbeimOptions, tagsOptions, updated)
     toast({ title: "Series removed" })
+  }
+
+  const startEditRebbe = (rebbe: string) => {
+    setEditingRebbe(rebbe)
+    setEditingTag(null)
+    setEditingSeries(null)
+    setEditValue(rebbe)
+  }
+
+  const startEditTag = (tag: string) => {
+    setEditingTag(tag)
+    setEditingRebbe(null)
+    setEditingSeries(null)
+    setEditValue(tag)
+  }
+
+  const startEditSeries = (series: string) => {
+    setEditingSeries(series)
+    setEditingRebbe(null)
+    setEditingTag(null)
+    setEditValue(series)
+  }
+
+  const cancelEdit = () => {
+    setEditingRebbe(null)
+    setEditingTag(null)
+    setEditingSeries(null)
+    setEditValue("")
+  }
+
+  // Rename a Rebbe and update all shiurim that reference the old name
+  const handleRenameRebbe = async (oldName: string) => {
+    const newName = editValue.trim()
+    if (!newName) {
+      toast({ title: "Name cannot be empty", variant: "destructive" })
+      return
+    }
+    if (newName === oldName) {
+      cancelEdit()
+      return
+    }
+    if (rebbeimOptions.includes(newName)) {
+      toast({ title: "A rebbe with that name already exists", variant: "destructive" })
+      return
+    }
+    setRenaming(true)
+    try {
+      // Update the options doc
+      const updated = rebbeimOptions.map((r) => (r === oldName ? newName : r)).sort()
+      setRebbeimOptions(updated)
+      await saveOptions(updated, tagsOptions, seriesOptions)
+
+      // Update every shiur that references this rebbe
+      const affected = shiurim.filter((s) => s.rebbe === oldName)
+      await Promise.all(
+        affected.map((s) => updateDoc(doc(db, "shiurim", s.id), { rebbe: newName })),
+      )
+
+      // Update local shiurim state so UI reflects change immediately
+      setShiurim((prev) => prev.map((s) => (s.rebbe === oldName ? { ...s, rebbe: newName } : s)))
+      cancelEdit()
+      toast({
+        title: "Rebbe renamed",
+        description: `Updated ${affected.length} shiur${affected.length !== 1 ? "im" : ""}.`,
+      })
+    } catch (err) {
+      console.error("Failed to rename rebbe:", err)
+      toast({ title: "Failed to rename rebbe", variant: "destructive" })
+    } finally {
+      setRenaming(false)
+    }
+  }
+
+  // Rename a Tag and update all shiurim whose tags array contains it
+  const handleRenameTag = async (oldName: string) => {
+    const newName = editValue.trim()
+    if (!newName) {
+      toast({ title: "Tag cannot be empty", variant: "destructive" })
+      return
+    }
+    if (newName === oldName) {
+      cancelEdit()
+      return
+    }
+    if (tagsOptions.includes(newName)) {
+      toast({ title: "A tag with that name already exists", variant: "destructive" })
+      return
+    }
+    setRenaming(true)
+    try {
+      const updated = tagsOptions.map((t) => (t === oldName ? newName : t)).sort()
+      setTagsOptions(updated)
+      await saveOptions(rebbeimOptions, updated, seriesOptions)
+
+      const affected = shiurim.filter((s) => Array.isArray(s.tags) && s.tags.includes(oldName))
+      await Promise.all(
+        affected.map((s) => {
+          const newTags = (s.tags || []).map((t: string) => (t === oldName ? newName : t))
+          return updateDoc(doc(db, "shiurim", s.id), { tags: newTags })
+        }),
+      )
+
+      setShiurim((prev) =>
+        prev.map((s) =>
+          Array.isArray(s.tags) && s.tags.includes(oldName)
+            ? { ...s, tags: s.tags.map((t: string) => (t === oldName ? newName : t)) }
+            : s,
+        ),
+      )
+      // If user is currently editing/creating a shiur that has this tag selected, sync that too
+      setSelectedTags((prev) => prev.map((t) => (t === oldName ? newName : t)))
+      cancelEdit()
+      toast({
+        title: "Tag renamed",
+        description: `Updated ${affected.length} shiur${affected.length !== 1 ? "im" : ""}.`,
+      })
+    } catch (err) {
+      console.error("Failed to rename tag:", err)
+      toast({ title: "Failed to rename tag", variant: "destructive" })
+    } finally {
+      setRenaming(false)
+    }
+  }
+
+  // Rename a Series and update all shiurim that reference the old name
+  const handleRenameSeries = async (oldName: string) => {
+    const newName = editValue.trim()
+    if (!newName) {
+      toast({ title: "Series name cannot be empty", variant: "destructive" })
+      return
+    }
+    if (newName === oldName) {
+      cancelEdit()
+      return
+    }
+    if (seriesOptions.includes(newName)) {
+      toast({ title: "A series with that name already exists", variant: "destructive" })
+      return
+    }
+    setRenaming(true)
+    try {
+      const updated = seriesOptions.map((s) => (s === oldName ? newName : s)).sort()
+      setSeriesOptions(updated)
+      await saveOptions(rebbeimOptions, tagsOptions, updated)
+
+      const affected = shiurim.filter((s) => s.series === oldName)
+      await Promise.all(
+        affected.map((s) => updateDoc(doc(db, "shiurim", s.id), { series: newName })),
+      )
+
+      setShiurim((prev) => prev.map((s) => (s.series === oldName ? { ...s, series: newName } : s)))
+      cancelEdit()
+      toast({
+        title: "Series renamed",
+        description: `Updated ${affected.length} shiur${affected.length !== 1 ? "im" : ""}.`,
+      })
+    } catch (err) {
+      console.error("Failed to rename series:", err)
+      toast({ title: "Failed to rename series", variant: "destructive" })
+    } finally {
+      setRenaming(false)
+    }
   }
 
   const toggleTag = (tag: string) => {
@@ -1377,14 +1546,68 @@ export default function AdminShiurimPage() {
                   </Button>
                 </div>
                 <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {rebbeimOptions.map((rebbe) => (
-                    <div key={rebbe} className="flex items-center justify-between p-2 bg-muted rounded">
-                      <span className="text-sm">{rebbe}</span>
-                      <Button variant="ghost" size="icon" onClick={() => handleRemoveRebbe(rebbe)}>
-                        <Trash2 className="h-3 w-3 text-destructive" />
-                      </Button>
-                    </div>
-                  ))}
+                  {rebbeimOptions.map((rebbe) => {
+                    const isEditing = editingRebbe === rebbe
+                    const count = shiurim.filter((s) => s.rebbe === rebbe).length
+                    return (
+                      <div key={rebbe} className="flex items-center justify-between gap-2 p-2 bg-muted rounded">
+                        {isEditing ? (
+                          <>
+                            <Input
+                              autoFocus
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleRenameRebbe(rebbe)
+                                if (e.key === "Escape") cancelEdit()
+                              }}
+                              disabled={renaming}
+                              className="h-8 text-sm"
+                            />
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => handleRenameRebbe(rebbe)}
+                                disabled={renaming}
+                              >
+                                {renaming ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Check className="h-3 w-3 text-green-600" />
+                                )}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={cancelEdit}
+                                disabled={renaming}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm">{rebbe}</span>
+                              <span className="text-xs text-muted-foreground ml-2">({count})</span>
+                            </div>
+                            <div className="flex items-center gap-0.5 flex-shrink-0">
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEditRebbe(rebbe)}>
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRemoveRebbe(rebbe)}>
+                                <Trash2 className="h-3 w-3 text-destructive" />
+                              </Button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -1409,14 +1632,68 @@ export default function AdminShiurimPage() {
                   </Button>
                 </div>
                 <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {tagsOptions.map((tag) => (
-                    <div key={tag} className="flex items-center justify-between p-2 bg-muted rounded">
-                      <span className="text-sm">{tag}</span>
-                      <Button variant="ghost" size="icon" onClick={() => handleRemoveTag(tag)}>
-                        <Trash2 className="h-3 w-3 text-destructive" />
-                      </Button>
-                    </div>
-                  ))}
+                  {tagsOptions.map((tag) => {
+                    const isEditing = editingTag === tag
+                    const count = shiurim.filter((s) => Array.isArray(s.tags) && s.tags.includes(tag)).length
+                    return (
+                      <div key={tag} className="flex items-center justify-between gap-2 p-2 bg-muted rounded">
+                        {isEditing ? (
+                          <>
+                            <Input
+                              autoFocus
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleRenameTag(tag)
+                                if (e.key === "Escape") cancelEdit()
+                              }}
+                              disabled={renaming}
+                              className="h-8 text-sm"
+                            />
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => handleRenameTag(tag)}
+                                disabled={renaming}
+                              >
+                                {renaming ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Check className="h-3 w-3 text-green-600" />
+                                )}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={cancelEdit}
+                                disabled={renaming}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm">{tag}</span>
+                              <span className="text-xs text-muted-foreground ml-2">({count})</span>
+                            </div>
+                            <div className="flex items-center gap-0.5 flex-shrink-0">
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEditTag(tag)}>
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRemoveTag(tag)}>
+                                <Trash2 className="h-3 w-3 text-destructive" />
+                              </Button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -1444,15 +1721,63 @@ export default function AdminShiurimPage() {
                 <div className="space-y-2 max-h-64 overflow-y-auto">
                   {seriesOptions.map((series) => {
                     const count = shiurim.filter((s) => s.series === series).length
+                    const isEditing = editingSeries === series
                     return (
-                      <div key={series} className="flex items-center justify-between p-2 bg-muted rounded">
-                        <div>
-                          <span className="text-sm font-hebrew">{series}</span>
-                          <span className="text-xs text-muted-foreground ml-2">({count} shiurim)</span>
-                        </div>
-                        <Button variant="ghost" size="icon" onClick={() => handleRemoveSeries(series)}>
-                          <Trash2 className="h-3 w-3 text-destructive" />
-                        </Button>
+                      <div key={series} className="flex items-center justify-between gap-2 p-2 bg-muted rounded">
+                        {isEditing ? (
+                          <>
+                            <Input
+                              autoFocus
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleRenameSeries(series)
+                                if (e.key === "Escape") cancelEdit()
+                              }}
+                              disabled={renaming}
+                              className="h-8 text-sm font-hebrew"
+                            />
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => handleRenameSeries(series)}
+                                disabled={renaming}
+                              >
+                                {renaming ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Check className="h-3 w-3 text-green-600" />
+                                )}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={cancelEdit}
+                                disabled={renaming}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm font-hebrew">{series}</span>
+                              <span className="text-xs text-muted-foreground ml-2">({count} shiurim)</span>
+                            </div>
+                            <div className="flex items-center gap-0.5 flex-shrink-0">
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEditSeries(series)}>
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRemoveSeries(series)}>
+                                <Trash2 className="h-3 w-3 text-destructive" />
+                              </Button>
+                            </div>
+                          </>
+                        )}
                       </div>
                     )
                   })}
