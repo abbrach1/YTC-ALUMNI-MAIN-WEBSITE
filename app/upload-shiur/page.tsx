@@ -16,7 +16,7 @@ import { db } from "@/lib/firebase"
 import { collection, addDoc, doc, getDoc, setDoc } from "firebase/firestore"
 import { uploadToB2 } from "@/lib/b2-upload"
 import { useToast } from "@/hooks/use-toast"
-import { getUserFriendlyError } from "@/lib/utils"
+import { getUserFriendlyError, checkFirestoreReachable } from "@/lib/utils"
 import { Loader2, CheckCircle, Plus, X, UploadIcon, Trash2, ListPlus } from "lucide-react"
 
 type UploadStatus = "idle" | "uploading-audio" | "uploading-pdf" | "saving" | "complete" | "error"
@@ -188,7 +188,19 @@ export default function UploadShiurPage() {
       toast({ title: "Please enter your name", variant: "destructive" })
       return
     }
-    
+
+    // Pre-flight check: detect ad blockers / privacy extensions before starting a long upload
+    const reachable = await checkFirestoreReachable()
+    if (!reachable) {
+      toast({
+        title: "Connection Blocked",
+        description:
+          "A browser extension (ad blocker or privacy extension) appears to be blocking the upload. Please disable it for this site or try a different browser, then try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setUploading(true)
     setUploadProgress(0)
 
@@ -284,6 +296,18 @@ export default function UploadShiurPage() {
     const missingNames = bulkEntries.some(e => !e.uploaderName.trim())
     if (missingNames) {
       toast({ title: "Please enter your name for all entries", variant: "destructive" })
+      return
+    }
+
+    // Pre-flight check: detect ad blockers before starting bulk upload
+    const reachable = await checkFirestoreReachable()
+    if (!reachable) {
+      toast({
+        title: "Connection Blocked",
+        description:
+          "A browser extension (ad blocker or privacy extension) appears to be blocking the upload. Please disable it for this site or try a different browser, then try again.",
+        variant: "destructive",
+      })
       return
     }
 

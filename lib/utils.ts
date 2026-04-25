@@ -5,11 +5,51 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+// Detect when an ad blocker / privacy extension is blocking Firebase requests
+export function isBlockedByClient(error: any): boolean {
+  const message = (error?.message || "").toLowerCase()
+  const code = (error?.code || "").toLowerCase()
+  return (
+    message.includes("err_blocked_by_client") ||
+    message.includes("blocked by client") ||
+    message.includes("network request failed") ||
+    code === "unavailable" ||
+    code === "failed-precondition"
+  )
+}
+
+// Quick non-intrusive check that Firestore is reachable from the browser.
+// Returns true if reachable, false if blocked by ad blocker / network.
+export async function checkFirestoreReachable(timeoutMs = 5000): Promise<boolean> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    // Hit the Firestore listen endpoint - if blocker is on, this will fail immediately
+    const response = await fetch("https://firestore.googleapis.com/v1/projects/_/databases/(default)/documents", {
+      method: "GET",
+      mode: "cors",
+      signal: controller.signal,
+      cache: "no-store",
+    }).catch(() => null)
+    clearTimeout(timer)
+    // Even a 401/403 response means the request reached Google's servers - that's fine.
+    // Only a null response (network failure / blocked) is a problem.
+    return response !== null
+  } catch {
+    return false
+  }
+}
+
 // Convert Firebase/technical errors to user-friendly messages
 export function getUserFriendlyError(error: any): string {
   const errorCode = error?.code || ''
   const errorMessage = error?.message || ''
-  
+
+  // Detect ad blocker / privacy extension blocking
+  if (isBlockedByClient(error)) {
+    return "It looks like a browser extension (such as an ad blocker or privacy extension) is blocking the upload. Please disable it for this site or try a different browser, then try again."
+  }
+
   // Firebase Auth errors
   const firebaseErrorMap: Record<string, string> = {
     'auth/invalid-email': 'Please enter a valid email address.',
