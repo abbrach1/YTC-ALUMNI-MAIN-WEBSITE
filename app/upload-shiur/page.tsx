@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type React from "react"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { useRouter } from "next/navigation"
 import { db } from "@/lib/firebase"
@@ -57,6 +57,19 @@ export default function UploadShiurPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle")
   const [uploadProgress, setUploadProgress] = useState(0)
+
+  // Background (parallel) upload state for audio + pdf
+  const [audioBgStatus, setAudioBgStatus] = useState<"idle" | "uploading" | "complete" | "error">("idle")
+  const [audioBgProgress, setAudioBgProgress] = useState(0)
+  const [audioBgUrl, setAudioBgUrl] = useState<string | null>(null)
+  const [audioBgError, setAudioBgError] = useState<string | null>(null)
+  const audioPromiseRef = useRef<Promise<string> | null>(null)
+
+  const [pdfBgStatus, setPdfBgStatus] = useState<"idle" | "uploading" | "complete" | "error">("idle")
+  const [pdfBgProgress, setPdfBgProgress] = useState(0)
+  const [pdfBgUrl, setPdfBgUrl] = useState<string | null>(null)
+  const [pdfBgError, setPdfBgError] = useState<string | null>(null)
+  const pdfPromiseRef = useRef<Promise<string> | null>(null)
 
   // Options state
   const [rebbeimOptions, setRebbeimOptions] = useState<string[]>([])
@@ -166,6 +179,88 @@ export default function UploadShiurPage() {
     return url
   }
 
+  // Start the audio upload immediately when a file is picked, in parallel with form filling
+  const handleAudioFileChange = async (file: File | null) => {
+    setAudioFile(file)
+    setAudioBgUrl(null)
+    setAudioBgError(null)
+    setAudioBgProgress(0)
+    audioPromiseRef.current = null
+
+    if (!file) {
+      setAudioBgStatus("idle")
+      return
+    }
+
+    // Pre-flight check so we don't start a long upload that will be silently blocked
+    const reachable = await checkFirestoreReachable()
+    if (!reachable) {
+      setAudioBgStatus("error")
+      setAudioBgError(
+        "A browser extension (ad blocker or privacy extension) appears to be blocking uploads. Please disable it for this site or try a different browser.",
+      )
+      toast({
+        title: "Connection Blocked",
+        description: "An ad blocker or privacy extension is blocking the upload. Please disable it for this site.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setAudioBgStatus("uploading")
+    const promise = uploadFile(file, "audio", (p) => setAudioBgProgress(p))
+      .then((url) => {
+        setAudioBgUrl(url)
+        setAudioBgStatus("complete")
+        setAudioBgProgress(100)
+        return url
+      })
+      .catch((err) => {
+        console.error("Audio upload error:", err)
+        setAudioBgStatus("error")
+        setAudioBgError(getUserFriendlyError(err))
+        throw err
+      })
+    audioPromiseRef.current = promise
+  }
+
+  const handlePdfFileChange = async (file: File | null) => {
+    setPdfFile(file)
+    setPdfBgUrl(null)
+    setPdfBgError(null)
+    setPdfBgProgress(0)
+    pdfPromiseRef.current = null
+
+    if (!file) {
+      setPdfBgStatus("idle")
+      return
+    }
+
+    setPdfBgStatus("uploading")
+    const promise = uploadFile(file, "pdf", (p) => setPdfBgProgress(p))
+      .then((url) => {
+        setPdfBgUrl(url)
+        setPdfBgStatus("complete")
+        setPdfBgProgress(100)
+        return url
+      })
+      .catch((err) => {
+        console.error("PDF upload error:", err)
+        setPdfBgStatus("error")
+        setPdfBgError(getUserFriendlyError(err))
+        throw err
+      })
+    pdfPromiseRef.current = promise
+  }
+
+  const retryAudioUpload = () => {
+    if (audioFile) handleAudioFileChange(audioFile)
+  }
+
+  const retryPdfUpload = () => {
+    if (pdfFile) handlePdfFileChange(pdfFile)
+  }
+
   const getStatusLabel = (status: UploadStatus) => {
     switch (status) {
       case "uploading-audio":
@@ -201,6 +296,29 @@ export default function UploadShiurPage() {
       return
     }
 
+    if (!audioFile && !audioBgUrl) {
+      toast({ title: "Please select an audio file", variant: "destructive" })
+      return
+    }
+
+    if (audioBgStatus === "error") {
+      toast({
+        title: "Audio upload failed",
+        description: audioBgError || "Please remove and re-select the audio file, then try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (pdfBgStatus === "error") {
+      toast({
+        title: "PDF upload failed",
+        description: pdfBgError || "Please remove and re-select the PDF, then try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setUploading(true)
     setUploadProgress(0)
 
@@ -208,16 +326,47 @@ export default function UploadShiurPage() {
       let audioUrl = ""
       let pdfUrl = ""
 
+      // Audio: use already-uploaded URL if available, otherwise wait for in-flight upload, else upload now
       if (audioFile) {
-        setUploadStatus("uploading-audio")
-        audioUrl = await uploadFile(audioFile, "audio", (p) => setUploadProgress(p * 0.6))
+        if (audioBgUrl) {
+          audioUrl = audioBgUrl
+          setUploadProgress(60)
+        } else if (audioPromiseRef.current) {
+          setUploadStatus("uploading-audio")
+          // Mirror background progress into the submit progress bar
+          const mirror = setInterval(() => setUploadProgress(audioBgProgress * 0.6), 200)
+          try {
+            audioUrl = await audioPromiseRef.current
+          } finally {
+            clearInterval(mirror)
+          }
+          setUploadProgress(60)
+        } else {
+          setUploadStatus("uploading-audio")
+          audioUrl = await uploadFile(audioFile, "audio", (p) => setUploadProgress(p * 0.6))
+        }
       } else {
         setUploadProgress(60)
       }
 
+      // PDF: same pattern
       if (pdfFile) {
-        setUploadStatus("uploading-pdf")
-        pdfUrl = await uploadFile(pdfFile, "pdf", (p) => setUploadProgress(60 + p * 0.3))
+        if (pdfBgUrl) {
+          pdfUrl = pdfBgUrl
+          setUploadProgress(90)
+        } else if (pdfPromiseRef.current) {
+          setUploadStatus("uploading-pdf")
+          const mirror = setInterval(() => setUploadProgress(60 + pdfBgProgress * 0.3), 200)
+          try {
+            pdfUrl = await pdfPromiseRef.current
+          } finally {
+            clearInterval(mirror)
+          }
+          setUploadProgress(90)
+        } else {
+          setUploadStatus("uploading-pdf")
+          pdfUrl = await uploadFile(pdfFile, "pdf", (p) => setUploadProgress(60 + p * 0.3))
+        }
       } else {
         setUploadProgress(90)
       }
@@ -417,6 +566,115 @@ export default function UploadShiurPage() {
           <TabsContent value="single">
             <div className="bg-white rounded-lg shadow-lg border-2 border-gold/20 p-8">
               <form onSubmit={handleSubmit} className="space-y-6">
+                {/* Files first - upload starts immediately so it runs while you fill out the rest */}
+                <div className="space-y-4 p-5 rounded-lg border-2 border-navy/20 bg-navy/[0.03]">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-navy font-bold text-lg">Step 1 - Upload Files First</h3>
+                      <p className="text-xs text-navy/60 mt-0.5">
+                        Pick your audio file now and it will upload in the background while you fill out the details below.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Audio File */}
+                  <div className="space-y-2">
+                    <Label className="text-navy font-semibold">Audio File *</Label>
+                    <Input
+                      type="file"
+                      accept="audio/*"
+                      required
+                      onChange={(e) => handleAudioFileChange(e.target.files?.[0] || null)}
+                      disabled={audioBgStatus === "uploading" || uploading}
+                      className="border-gold/30 bg-white"
+                    />
+                    {audioFile && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-navy/70 truncate flex-1 mr-2 flex items-center gap-1.5">
+                            {audioBgStatus === "uploading" && <Loader2 className="h-3 w-3 animate-spin text-navy/60 flex-shrink-0" />}
+                            {audioBgStatus === "complete" && <CheckCircle className="h-3 w-3 text-green-600 flex-shrink-0" />}
+                            <span className="truncate">{audioFile.name}</span>
+                          </span>
+                          <span className="font-medium flex-shrink-0">
+                            {audioBgStatus === "uploading" && (
+                              <span className="text-navy">{Math.round(audioBgProgress)}%</span>
+                            )}
+                            {audioBgStatus === "complete" && (
+                              <span className="text-green-700">Uploaded</span>
+                            )}
+                            {audioBgStatus === "error" && (
+                              <span className="text-red-600">Failed</span>
+                            )}
+                          </span>
+                        </div>
+                        {audioBgStatus === "uploading" && (
+                          <Progress value={audioBgProgress} className="h-1.5" />
+                        )}
+                        {audioBgStatus === "error" && (
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="text-red-600 flex-1">{audioBgError}</span>
+                            <Button type="button" variant="outline" size="sm" onClick={retryAudioUpload} className="h-7 text-xs">
+                              Retry
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Mareh Mekomos PDF */}
+                  <div className="space-y-2">
+                    <Label className="text-navy font-semibold">Mareh Mekomos (PDF) - Optional</Label>
+                    <Input
+                      type="file"
+                      accept=".pdf"
+                      onChange={(e) => handlePdfFileChange(e.target.files?.[0] || null)}
+                      disabled={pdfBgStatus === "uploading" || uploading}
+                      className="border-gold/30 bg-white"
+                    />
+                    {pdfFile && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-navy/70 truncate flex-1 mr-2 flex items-center gap-1.5">
+                            {pdfBgStatus === "uploading" && <Loader2 className="h-3 w-3 animate-spin text-navy/60 flex-shrink-0" />}
+                            {pdfBgStatus === "complete" && <CheckCircle className="h-3 w-3 text-green-600 flex-shrink-0" />}
+                            <span className="truncate">{pdfFile.name}</span>
+                          </span>
+                          <span className="font-medium flex-shrink-0">
+                            {pdfBgStatus === "uploading" && (
+                              <span className="text-navy">{Math.round(pdfBgProgress)}%</span>
+                            )}
+                            {pdfBgStatus === "complete" && (
+                              <span className="text-green-700">Uploaded</span>
+                            )}
+                            {pdfBgStatus === "error" && (
+                              <span className="text-red-600">Failed</span>
+                            )}
+                          </span>
+                        </div>
+                        {pdfBgStatus === "uploading" && (
+                          <Progress value={pdfBgProgress} className="h-1.5" />
+                        )}
+                        {pdfBgStatus === "error" && (
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="text-red-600 flex-1">{pdfBgError}</span>
+                            <Button type="button" variant="outline" size="sm" onClick={retryPdfUpload} className="h-7 text-xs">
+                              Retry
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Step 2 marker */}
+                <div className="pt-2">
+                  <h3 className="text-navy font-bold text-lg">Step 2 - Shiur Details</h3>
+                  <p className="text-xs text-navy/60 mt-0.5">Fill these in while your file uploads.</p>
+                </div>
+
                 {/* Uploader Name */}
                 <div className="space-y-2 p-4 bg-gold/5 rounded-lg border border-gold/20">
                   <Label htmlFor="uploaderName" className="text-navy font-semibold">
@@ -637,30 +895,6 @@ export default function UploadShiurPage() {
                   />
                 </div>
 
-                {/* Audio Upload - B2 Only */}
-                <div className="space-y-2">
-                  <Label className="text-navy font-semibold">Audio File *</Label>
-                  <Input
-                    type="file"
-                    accept="audio/*"
-                    required
-                    onChange={(e) => setAudioFile(e.target.files?.[0] || null)}
-                    className="border-gold/30"
-                  />
-                  {audioFile && <p className="text-sm text-navy/70">Selected: {audioFile.name}</p>}
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-navy font-semibold">Mareh Mekomos (PDF)</Label>
-                  <Input
-                    type="file"
-                    accept=".pdf"
-                    onChange={(e) => setPdfFile(e.target.files?.[0] || null)}
-                    className="border-gold/30"
-                  />
-                  {pdfFile && <p className="text-sm text-navy/70">Selected: {pdfFile.name}</p>}
-                </div>
-
                 {uploadStatus !== "idle" && uploadStatus !== "error" && (
                   <div className="space-y-2 p-4 bg-gold/5 rounded-lg border border-gold/20">
                     <div className="flex items-center justify-between text-sm">
@@ -680,18 +914,22 @@ export default function UploadShiurPage() {
 
                 <Button
                   type="submit"
-                  disabled={uploading}
+                  disabled={uploading || audioBgStatus === "error" || pdfBgStatus === "error"}
                   className="w-full bg-navy text-cream hover:bg-navy/90 h-12 text-lg font-semibold"
                 >
                   {uploading ? (
                     <>
                       <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                      {getStatusLabel(uploadStatus)}
+                      {audioBgStatus === "uploading"
+                        ? `Waiting for audio (${Math.round(audioBgProgress)}%)...`
+                        : getStatusLabel(uploadStatus)}
                     </>
                   ) : (
                     <>
                       <UploadIcon className="mr-2 h-5 w-5" />
-                      Upload Shiur
+                      {audioBgStatus === "uploading"
+                        ? `Submit (audio still uploading - ${Math.round(audioBgProgress)}%)`
+                        : "Upload Shiur"}
                     </>
                   )}
                 </Button>
