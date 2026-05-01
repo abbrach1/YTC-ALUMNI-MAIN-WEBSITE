@@ -50,6 +50,15 @@ interface Alumni {
   status: "pending" | "approved" | "rejected"
 }
 
+interface Rebbe {
+  id: string
+  name: string
+  title: string
+  email?: string
+  phone?: string
+  photoUrl?: string
+}
+
 export default function ContactsContent() {
   const [alumni, setAlumni] = useState<Alumni[]>([])
   const [filteredAlumni, setFilteredAlumni] = useState<Alumni[]>([])
@@ -61,6 +70,11 @@ export default function ContactsContent() {
   const [sortBy, setSortBy] = useState<"name" | "graduationYear">("name")
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<"rebbeim" | "alumni">("alumni")
+  const [rebbeim, setRebbeim] = useState<Rebbe[]>([])
+  const [filteredRebbeim, setFilteredRebbeim] = useState<Rebbe[]>([])
+  const [rebbeimSearch, setRebbeimSearch] = useState("")
+  const [rebbeimLoading, setRebbeimLoading] = useState(true)
+  const [expandedRebbeId, setExpandedRebbeId] = useState<string | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [userRecord, setUserRecord] = useState<any>(null)
   const [hasExistingRecord, setHasExistingRecord] = useState(false)
@@ -109,6 +123,45 @@ export default function ContactsContent() {
     }
     fetchData()
   }, [user])
+
+  // Fetch Rebbeim directory
+  useEffect(() => {
+    const fetchRebbeim = async () => {
+      try {
+        setRebbeimLoading(true)
+        const snapshot = await getDocs(collection(db, "rebbeim"))
+        const data: Rebbe[] = []
+        snapshot.forEach((d) => {
+          data.push({ id: d.id, ...(d.data() as Omit<Rebbe, "id">) })
+        })
+        data.sort((a, b) => a.name.localeCompare(b.name))
+        setRebbeim(data)
+        setFilteredRebbeim(data)
+      } catch (error) {
+        console.error("Error fetching rebbeim:", error)
+      } finally {
+        setRebbeimLoading(false)
+      }
+    }
+    fetchRebbeim()
+  }, [])
+
+  // Filter Rebbeim by search term
+  useEffect(() => {
+    if (!rebbeimSearch.trim()) {
+      setFilteredRebbeim(rebbeim)
+      return
+    }
+    const term = rebbeimSearch.toLowerCase()
+    setFilteredRebbeim(
+      rebbeim.filter(
+        (r) =>
+          r.name.toLowerCase().includes(term) ||
+          r.title?.toLowerCase().includes(term) ||
+          r.email?.toLowerCase().includes(term),
+      ),
+    )
+  }, [rebbeimSearch, rebbeim])
 
   useEffect(() => {
     let filtered = [...alumni]
@@ -315,16 +368,119 @@ export default function ContactsContent() {
 
           {activeTab === "rebbeim" && (
             <section className="mb-12">
-              <Card className="border border-navy/10 bg-white max-w-2xl mx-auto">
-                <CardContent className="py-12 px-6 text-center">
-                  <BookOpen className="mx-auto h-12 w-12 mb-4 text-navy/30" />
-                  <h3 className="text-xl font-semibold text-navy mb-2">Rebbeim Directory Coming Soon</h3>
-                  <p className="text-navy/60 max-w-md mx-auto">
-                    We are working on building the Rebbeim directory. Check back soon for contact information
-                    for all the Rebbeim.
-                  </p>
-                </CardContent>
-              </Card>
+              <div className="mb-6">
+                <div className="relative">
+                  <Input
+                    placeholder="Search Rebbeim by name, title, or email..."
+                    value={rebbeimSearch}
+                    onChange={(e) => setRebbeimSearch(e.target.value)}
+                    className="pl-10 border-navy/20"
+                  />
+                  <BookOpen className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-navy/40" />
+                </div>
+                <div className="mt-3 text-sm text-navy/60">
+                  {rebbeimLoading
+                    ? "Loading..."
+                    : `${filteredRebbeim.length} ${filteredRebbeim.length === 1 ? "Rebbe" : "Rebbeim"}`}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {rebbeimLoading ? (
+                  <div className="py-12 text-center">
+                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-navy" />
+                    <p className="text-navy/60 mt-2">Loading Rebbeim...</p>
+                  </div>
+                ) : filteredRebbeim.length === 0 ? (
+                  <Card className="border border-navy/10 bg-white">
+                    <CardContent className="py-12 px-6 text-center">
+                      <BookOpen className="mx-auto h-12 w-12 mb-4 text-navy/30" />
+                      <h3 className="text-lg font-semibold text-navy mb-2">No Rebbeim found</h3>
+                      <p className="text-navy/60 max-w-md mx-auto">
+                        {rebbeimSearch
+                          ? "Try adjusting your search."
+                          : "The Rebbeim directory is currently empty."}
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  filteredRebbeim.map((rebbe) => {
+                    const initials = `${rebbe.name.split(" ")[0]?.[0] || ""}${rebbe.name.split(" ").slice(-1)[0]?.[0] || ""}`
+                    const isExpanded = expandedRebbeId === rebbe.id
+                    const hasContact = rebbe.email || rebbe.phone
+                    return (
+                      <Card
+                        key={rebbe.id}
+                        className={`border border-navy/10 bg-white transition-shadow ${
+                          hasContact ? "hover:shadow-md cursor-pointer" : ""
+                        }`}
+                        onClick={() => {
+                          if (hasContact) {
+                            setExpandedRebbeId(isExpanded ? null : rebbe.id)
+                          }
+                        }}
+                      >
+                        <CardContent className="p-5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-3">
+                                <Avatar className="h-12 w-12 border-2 border-gold/30">
+                                  {rebbe.photoUrl && <AvatarImage src={rebbe.photoUrl} alt={rebbe.name} />}
+                                  <AvatarFallback className="bg-navy/5 text-navy font-semibold">
+                                    {initials || <BookOpen className="h-5 w-5" />}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="min-w-0">
+                                  <h3 className="font-semibold text-navy truncate">{rebbe.name}</h3>
+                                  {rebbe.title && (
+                                    <p className="text-sm text-navy/60 truncate">{rebbe.title}</p>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                            {hasContact && (
+                              <ChevronDown
+                                className={`h-5 w-5 text-navy/40 transition-transform flex-shrink-0 ml-2 ${
+                                  isExpanded ? "rotate-180" : ""
+                                }`}
+                              />
+                            )}
+                          </div>
+
+                          {isExpanded && hasContact && (
+                            <div className="mt-5 pt-5 border-t border-navy/10 space-y-3">
+                              {rebbe.email && (
+                                <div className="flex items-start gap-3">
+                                  <Mail className="h-4 w-4 text-navy/40 mt-0.5 flex-shrink-0" />
+                                  <a
+                                    href={`mailto:${rebbe.email}`}
+                                    className="text-navy hover:text-gold transition-colors break-all"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {rebbe.email}
+                                  </a>
+                                </div>
+                              )}
+                              {rebbe.phone && (
+                                <div className="flex items-start gap-3">
+                                  <Phone className="h-4 w-4 text-navy/40 mt-0.5 flex-shrink-0" />
+                                  <a
+                                    href={`tel:${rebbe.phone}`}
+                                    className="text-navy hover:text-gold transition-colors"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {rebbe.phone}
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )
+                  })
+                )}
+              </div>
             </section>
           )}
 
