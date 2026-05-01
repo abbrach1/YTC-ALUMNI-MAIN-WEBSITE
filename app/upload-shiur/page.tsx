@@ -17,6 +17,7 @@ import { collection, addDoc, doc, getDoc, setDoc } from "firebase/firestore"
 import { uploadToB2 } from "@/lib/b2-upload"
 import { useToast } from "@/hooks/use-toast"
 import { getUserFriendlyError, checkFirestoreReachable } from "@/lib/utils"
+import { FileDropzone } from "@/components/file-dropzone"
 import { Loader2, CheckCircle, Plus, X, UploadIcon, Trash2, ListPlus } from "lucide-react"
 
 type UploadStatus = "idle" | "uploading-audio" | "uploading-pdf" | "saving" | "complete" | "error"
@@ -580,13 +581,13 @@ export default function UploadShiurPage() {
                   {/* Audio File */}
                   <div className="space-y-2">
                     <Label className="text-navy font-semibold">Audio File *</Label>
-                    <Input
-                      type="file"
+                    <FileDropzone
                       accept="audio/*"
-                      required
-                      onChange={(e) => handleAudioFileChange(e.target.files?.[0] || null)}
+                      label="Drop audio file here, or click to browse"
+                      hint="MP3, WAV, M4A, etc."
+                      selectedFile={audioFile}
                       disabled={audioBgStatus === "uploading" || uploading}
-                      className="border-gold/30 bg-white"
+                      onFilesSelected={(files) => handleAudioFileChange(files[0] || null)}
                     />
                     {audioFile && (
                       <div className="space-y-1.5">
@@ -626,12 +627,13 @@ export default function UploadShiurPage() {
                   {/* Mareh Mekomos PDF */}
                   <div className="space-y-2">
                     <Label className="text-navy font-semibold">Mareh Mekomos (PDF) - Optional</Label>
-                    <Input
-                      type="file"
+                    <FileDropzone
                       accept=".pdf"
-                      onChange={(e) => handlePdfFileChange(e.target.files?.[0] || null)}
+                      label="Drop PDF here, or click to browse"
+                      hint="Mareh mekomos / source sheets"
+                      selectedFile={pdfFile}
                       disabled={pdfBgStatus === "uploading" || uploading}
-                      className="border-gold/30 bg-white"
+                      onFilesSelected={(files) => handlePdfFileChange(files[0] || null)}
                     />
                     {pdfFile && (
                       <div className="space-y-1.5">
@@ -1006,13 +1008,39 @@ export default function UploadShiurPage() {
                 </Card>
               )}
 
+              {/* Multi-file drop zone - drop many audio files to auto-create entries */}
+              <FileDropzone
+                accept="audio/*"
+                multiple
+                label="Drop multiple audio files here to add them all at once"
+                hint="Each file will become its own shiur entry - then fill in the details below"
+                disabled={bulkUploading}
+                onFilesSelected={(files) => {
+                  const newEntries: BulkShiurEntry[] = files.map((file) => {
+                    const baseName = file.name.replace(/\.[^/.]+$/, "")
+                    return {
+                      ...createEmptyBulkEntry(),
+                      audioFile: file,
+                      title: baseName,
+                    }
+                  })
+                  setBulkEntries((prev) => [...prev, ...newEntries])
+                  toast({
+                    title: `Added ${files.length} shiur${files.length !== 1 ? "im" : ""}`,
+                    description: "Fill in the details for each entry below.",
+                  })
+                }}
+              />
+
               {/* Bulk Entries */}
               {bulkEntries.length === 0 ? (
                 <Card className="bg-white border-gold/20">
                   <CardContent className="py-12 text-center">
                     <ListPlus className="h-12 w-12 text-gold/50 mx-auto mb-4" />
                     <h3 className="text-lg font-semibold text-navy mb-2">No shiurim added yet</h3>
-                    <p className="text-navy/60 mb-4">Add multiple shiurim to upload them all at once</p>
+                    <p className="text-navy/60 mb-4">
+                      Drop audio files above, or add a single entry to get started
+                    </p>
                     <Button onClick={addBulkEntry} className="bg-navy text-cream hover:bg-navy/90">
                       <Plus className="h-4 w-4 mr-2" />
                       Add First Shiur
@@ -1143,29 +1171,31 @@ export default function UploadShiurPage() {
                         <div className="grid gap-4 md:grid-cols-2">
                           <div className="space-y-2">
                             <Label className="text-navy font-semibold text-sm">Audio File *</Label>
-                            <Input
-                              type="file"
+                            <FileDropzone
                               accept="audio/*"
-                              onChange={(e) => updateBulkEntry(entry.id, { audioFile: e.target.files?.[0] || null })}
-                              className="border-gold/30"
+                              label="Drop audio or click"
+                              hint="MP3, WAV, M4A"
+                              compact
+                              selectedFile={entry.audioFile}
                               disabled={bulkUploading}
+                              onFilesSelected={(files) =>
+                                updateBulkEntry(entry.id, { audioFile: files[0] || null })
+                              }
                             />
-                            {entry.audioFile && (
-                              <p className="text-xs text-navy/60">{entry.audioFile.name}</p>
-                            )}
                           </div>
                           <div className="space-y-2">
                             <Label className="text-navy font-semibold text-sm">PDF (Optional)</Label>
-                            <Input
-                              type="file"
+                            <FileDropzone
                               accept=".pdf"
-                              onChange={(e) => updateBulkEntry(entry.id, { pdfFile: e.target.files?.[0] || null })}
-                              className="border-gold/30"
+                              label="Drop PDF or click"
+                              hint="Optional source sheet"
+                              compact
+                              selectedFile={entry.pdfFile}
                               disabled={bulkUploading}
+                              onFilesSelected={(files) =>
+                                updateBulkEntry(entry.id, { pdfFile: files[0] || null })
+                              }
                             />
-                            {entry.pdfFile && (
-                              <p className="text-xs text-navy/60">{entry.pdfFile.name}</p>
-                            )}
                           </div>
                         </div>
 
