@@ -14,9 +14,10 @@ import {
   Dialog,
   DialogContent,
 } from "@/components/ui/dialog"
-import { collection, getDocs, query, orderBy, limit, doc, updateDoc, increment } from "firebase/firestore"
+import { collection, getDocs, query, orderBy, limit } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/lib/auth-context"
+import { trackPlay, trackDownload } from "@/lib/track-engagement"
 import { useToast } from "@/hooks/use-toast"
 
 interface UpcomingShiur {
@@ -94,26 +95,12 @@ export default function HomePage() {
 
   const incrementPlayCount = async (shiurId: string) => {
     if (playedShiurim.has(shiurId)) return
-    try {
-      const shiurRef = doc(db, "shiurim", shiurId)
-      await updateDoc(shiurRef, {
-        playCount: increment(1)
-      })
-      setPlayedShiurim(prev => new Set(prev).add(shiurId))
-    } catch (error) {
-      console.error("Error incrementing play count:", error)
-    }
+    setPlayedShiurim(prev => new Set(prev).add(shiurId))
+    await trackPlay(shiurId, user)
   }
 
   const incrementDownloadCount = async (shiurId: string) => {
-    try {
-      const shiurRef = doc(db, "shiurim", shiurId)
-      await updateDoc(shiurRef, {
-        downloadCount: increment(1)
-      })
-    } catch (error) {
-      console.error("Error incrementing download count:", error)
-    }
+    await trackDownload(shiurId, user)
   }
   const { toast } = useToast()
 

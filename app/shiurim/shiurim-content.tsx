@@ -36,9 +36,10 @@ import {
   Loader2,
   ArrowUpDown,
 } from "lucide-react"
-import { collection, getDocs, query, orderBy, doc, updateDoc, increment } from "firebase/firestore"
+import { collection, getDocs, query, orderBy } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/lib/auth-context"
+import { trackPlay, trackDownload } from "@/lib/track-engagement"
 import { useSearchParams, useRouter } from "next/navigation"
 import {
   getSavedShiurimLocal,
@@ -128,27 +129,7 @@ const markAsDownloaded = (shiurId: string): string[] => {
   }
 }
 
-const incrementPlayCount = async (shiurId: string) => {
-  try {
-    const shiurRef = doc(db, "shiurim", shiurId)
-    await updateDoc(shiurRef, {
-      playCount: increment(1),
-    })
-  } catch (error) {
-    console.error("Error incrementing play count:", error)
-  }
-}
 
-const incrementDownloadCount = async (shiurId: string) => {
-  try {
-    const shiurRef = doc(db, "shiurim", shiurId)
-    await updateDoc(shiurRef, {
-      downloadCount: increment(1),
-    })
-  } catch (error) {
-    console.error("Error incrementing download count:", error)
-  }
-}
 
 function GoogleDriveAudioPlayer({
   fileId,
@@ -435,7 +416,7 @@ export default function ShiurimContent() {
 
   const handleDownload = async (shiurId: string, audioUrl: string, title: string) => {
     setDownloadingId(shiurId)
-    await incrementDownloadCount(shiurId)
+    await trackDownload(shiurId, user)
     const newDownloaded = markAsDownloaded(shiurId)
     setDownloadedShiurim(newDownloaded)
 
@@ -466,7 +447,7 @@ export default function ShiurimContent() {
   }
 
   const handlePlay = async (shiurId: string) => {
-    await incrementPlayCount(shiurId)
+    await trackPlay(shiurId, user)
   }
 
   const toggleSeries = (series: string) => {

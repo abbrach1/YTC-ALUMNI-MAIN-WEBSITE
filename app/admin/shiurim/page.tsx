@@ -43,6 +43,7 @@ import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage"
 import { storage, db } from "@/lib/firebase"
 import { uploadToB2 } from "@/lib/b2-upload"
 import { useToast } from "@/hooks/use-toast"
+import { EngagementHoverCard } from "@/components/engagement-hover-card"
 import {
   Dialog,
   DialogContent,
@@ -1461,14 +1462,22 @@ export default function AdminShiurimPage() {
                         ))}
                       </div>
                       <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1">
+                        <EngagementHoverCard
+                          shiurId={shiur.id}
+                          type="plays"
+                          total={shiur.playCount || 0}
+                        >
                           <Play className="h-3 w-3" />
-                          {shiur.playCount || 0} plays
-                        </span>
-                        <span className="flex items-center gap-1">
+                          <span>{shiur.playCount || 0} plays</span>
+                        </EngagementHoverCard>
+                        <EngagementHoverCard
+                          shiurId={shiur.id}
+                          type="downloads"
+                          total={shiur.downloadCount || 0}
+                        >
                           <Download className="h-3 w-3" />
-                          {shiur.downloadCount || 0} downloads
-                        </span>
+                          <span>{shiur.downloadCount || 0} downloads</span>
+                        </EngagementHoverCard>
                         {(shiur.uploaderName || shiur.uploadedBy) && (
                           <span className="flex items-center gap-1 text-navy/60">
                             <Upload className="h-3 w-3" />

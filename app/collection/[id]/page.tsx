@@ -8,8 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Calendar, Play, ExternalLink, ArrowLeft, Download, Loader2 } from "lucide-react"
 import Link from "next/link"
-import { doc, getDoc, updateDoc, increment } from "firebase/firestore"
+import { doc, getDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { useAuth } from "@/lib/auth-context"
+import { trackPlay, trackDownload } from "@/lib/track-engagement"
 import { useToast } from "@/hooks/use-toast"
 
 interface Shiur {
@@ -38,6 +40,7 @@ export default function CollectionPage() {
   const [playingShiur, setPlayingShiur] = useState<string | null>(null)
   const [downloadingShiur, setDownloadingShiur] = useState<string | null>(null)
   const { toast } = useToast()
+  const { user } = useAuth()
 
   useEffect(() => {
     if (collection) {
@@ -83,13 +86,7 @@ export default function CollectionPage() {
 
   const handlePlay = async (shiur: Shiur) => {
     setPlayingShiur(shiur.id)
-    try {
-      await updateDoc(doc(db, "shiurim", shiur.id), {
-        playCount: increment(1),
-      })
-    } catch (error) {
-      console.error("Error updating play count:", error)
-    }
+    await trackPlay(shiur.id, user)
 
     if (isGoogleDriveUrl(shiur.audioUrl || "")) {
       window.open(shiur.audioUrl, "_blank")
@@ -102,9 +99,7 @@ export default function CollectionPage() {
 
     setDownloadingShiur(shiur.id)
     try {
-      await updateDoc(doc(db, "shiurim", shiur.id), {
-        downloadCount: increment(1),
-      })
+      await trackDownload(shiur.id, user)
 
       if (isGoogleDriveUrl(shiur.audioUrl)) {
         const match = shiur.audioUrl.match(/\/d\/([a-zA-Z0-9_-]+)/)
