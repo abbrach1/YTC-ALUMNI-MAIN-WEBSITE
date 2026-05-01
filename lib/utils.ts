@@ -19,24 +19,49 @@ export function isBlockedByClient(error: any): boolean {
 }
 
 // Quick non-intrusive check that Firestore is reachable from the browser.
-// Returns true if reachable, false if blocked by ad blocker / network.
+// Uses the Firestore SDK (which has proper CORS support via WebChannel) rather
+// than a raw fetch to the REST API (which is blocked by browser CORS policy
+// and produces false positives).
+// Returns true if reachable, false if truly blocked by ad blocker / network.
 export async function checkFirestoreReachable(timeoutMs = 5000): Promise<boolean> {
   try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
-    // Hit the Firestore listen endpoint - if blocker is on, this will fail immediately
-    const response = await fetch("https://firestore.googleapis.com/v1/projects/_/databases/(default)/documents", {
-      method: "GET",
-      mode: "cors",
-      signal: controller.signal,
-      cache: "no-store",
-    }).catch(() => null)
-    clearTimeout(timer)
-    // Even a 401/403 response means the request reached Google's servers - that's fine.
-    // Only a null response (network failure / blocked) is a problem.
-    return response !== null
+    // Lazy import to avoid bundling firestore if not used
+    const [{ doc, getDoc }, { db }] = await Promise.all([
+      import("firebase/firestore"),
+      import("./firebase"),
+    ])
+
+    // Race against a timeout - if the SDK hangs, treat as unreachable
+    const timeout = new Promise<"timeout">((resolve) =>
+      setTimeout(() => resolve("timeout"), timeoutMs),
+    )
+    // A "not found" response still means we successfully reached Firestore
+    const probe = getDoc(doc(db, "_health", "check"))
+      .then(() => "ok" as const)
+      .catch((err: any) => {
+        const code = (err?.code || "").toLowerCase()
+        const msg = (err?.message || "").toLowerCase()
+        // These error codes mean the SDK reached Firestore (auth/permission errors)
+        // - that's fine, the network is working.
+        if (code === "permission-denied" || code === "not-found") return "ok" as const
+        // unavailable / blocked / network errors mean truly unreachable
+        if (
+          code === "unavailable" ||
+          msg.includes("err_blocked_by_client") ||
+          msg.includes("blocked by client") ||
+          msg.includes("network")
+        ) {
+          return "blocked" as const
+        }
+        // Any other error - assume working, let the real upload surface the issue
+        return "ok" as const
+      })
+
+    const result = await Promise.race([probe, timeout])
+    return result === "ok"
   } catch {
-    return false
+    // If something unexpected breaks, don't block the user - assume reachable
+    return true
   }
 }
 
