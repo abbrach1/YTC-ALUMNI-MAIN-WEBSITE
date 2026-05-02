@@ -6,14 +6,20 @@ import { usePathname } from "next/navigation"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { BookOpen, ArrowRight, Sparkles } from "lucide-react"
+import { useAuth } from "@/lib/auth-context"
 
 const STORAGE_KEY = "ytc-rebbeim-portal-announcement-v1-dismissed"
 
 export function RebbeimPortalAnnouncement() {
   const [open, setOpen] = useState(false)
   const pathname = usePathname()
+  const { user, loading } = useAuth()
 
   useEffect(() => {
+    // Wait for auth to resolve, only show to logged-in users
+    if (loading) return
+    if (!user) return
+
     // Don't show on the contacts page itself - they're already there
     if (pathname?.startsWith("/contacts")) return
 
@@ -27,7 +33,7 @@ export function RebbeimPortalAnnouncement() {
     } catch {
       // localStorage unavailable (private mode etc.) - just don't show
     }
-  }, [pathname])
+  }, [pathname, user, loading])
 
   const dismiss = () => {
     try {
