@@ -8,6 +8,7 @@ import { Footer } from "@/components/footer"
 import { ScrollToTop } from "@/components/scroll-to-top"
 import { AnalyticsTracker } from "@/components/analytics-tracker"
 import { FirstLoginPopup } from "@/components/first-login-popup"
+import { RebbeimPortalAnnouncement } from "@/components/rebbeim-portal-announcement"
 import "./globals.css"
 
 const merriweather = Merriweather({
@@ -213,6 +214,7 @@ export default function RootLayout({
           <ScrollToTop />
           <AnalyticsTracker />
           <FirstLoginPopup />
+          <RebbeimPortalAnnouncement />
         </AuthProvider>
         <Analytics />
       </body>

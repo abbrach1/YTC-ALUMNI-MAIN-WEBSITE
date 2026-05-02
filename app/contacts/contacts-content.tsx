@@ -3,6 +3,7 @@
 import type React from "react"
 
 import { useEffect, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { Navbar } from "@/components/navbar"
 import { AuthGuard } from "@/components/auth-guard"
 import { Card, CardContent } from "@/components/ui/card"
@@ -69,7 +70,9 @@ export default function ContactsContent() {
   const [searchTerm, setSearchTerm] = useState("")
   const [sortBy, setSortBy] = useState<"name" | "graduationYear">("name")
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<"rebbeim" | "alumni">("alumni")
+  const searchParams = useSearchParams()
+  const initialTab = searchParams?.get("tab") === "rebbeim" ? "rebbeim" : "alumni"
+  const [activeTab, setActiveTab] = useState<"rebbeim" | "alumni">(initialTab)
   const [rebbeim, setRebbeim] = useState<Rebbe[]>([])
   const [filteredRebbeim, setFilteredRebbeim] = useState<Rebbe[]>([])
   const [rebbeimSearch, setRebbeimSearch] = useState("")
