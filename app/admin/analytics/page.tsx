@@ -489,6 +489,70 @@ export default function AnalyticsPage() {
       .slice(0, 25)
   }, [pageViews])
 
+  // Per-day breakdown: for each day, who visited and which pages got how many views.
+  const dailyBreakdown = useMemo(() => {
+    type Day = {
+      dayKey: string
+      dayLabel: string
+      totalViews: number
+      pages: { path: string; views: number }[]
+      visitors: { key: string; name: string; email: string | null; lastSeen: Date | null }[]
+    }
+    const byDay: Record<string, {
+      totalViews: number
+      pages: Record<string, number>
+      visitorMap: Record<string, { name: string; email: string | null; lastSeen: Date | null }>
+    }> = {}
+
+    pageViews.forEach((pv) => {
+      if (!pv.timestamp) return
+      const dayKey = formatDayKey(pv.timestamp)
+      if (!byDay[dayKey]) {
+        byDay[dayKey] = { totalViews: 0, pages: {}, visitorMap: {} }
+      }
+      const bucket = byDay[dayKey]
+      // Page-view counters (anonymous expansions) and real path events both count
+      if (pv.path !== "(site)") {
+        const path = pv.path.split("?")[0] || "/"
+        bucket.totalViews += 1
+        bucket.pages[path] = (bucket.pages[path] || 0) + 1
+      }
+      // Track visitor identities (any record with a user)
+      const id = pv.userEmail || pv.userId
+      if (id) {
+        const existing = bucket.visitorMap[id]
+        const ts = pv.timestamp
+        if (!existing || (existing.lastSeen && ts > existing.lastSeen) || !existing.lastSeen) {
+          bucket.visitorMap[id] = {
+            name: pv.userName || pv.userEmail || "Anonymous",
+            email: pv.userEmail,
+            lastSeen: ts,
+          }
+        }
+      }
+    })
+
+    const days: Day[] = Object.entries(byDay)
+      .map(([dayKey, b]) => ({
+        dayKey,
+        dayLabel: formatDayLabel(dayKey),
+        totalViews: b.totalViews,
+        pages: Object.entries(b.pages)
+          .map(([path, views]) => ({ path, views }))
+          .sort((a, b) => b.views - a.views),
+        visitors: Object.entries(b.visitorMap)
+          .map(([key, v]) => ({ key, ...v }))
+          .sort((a, b) => {
+            const at = a.lastSeen?.getTime() ?? 0
+            const bt = b.lastSeen?.getTime() ?? 0
+            return bt - at
+          }),
+      }))
+      .sort((a, b) => (a.dayKey < b.dayKey ? 1 : -1))
+
+    return days
+  }, [pageViews])
+
   const recentActivity = useMemo(() => {
     type Row = EngagementEvent & { kind: "play" | "download" }
     const all: Row[] = [
@@ -848,73 +912,101 @@ export default function AnalyticsPage() {
               />
             </div>
 
-            {/* Top pages + recent visitors */}
-            <div className="grid gap-4 lg:grid-cols-2">
+            {/* Daily breakdown - one card per day showing who visited and which pages */}
+            {dailyBreakdown.length === 0 ? (
               <Card className="border-gold/20 bg-white shadow-sm">
-                <CardHeader>
-                  <CardTitle className="text-navy text-base">Top Pages</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {topPages.length === 0 ? (
-                    <EmptyState message="No page views in this range yet." />
-                  ) : (
-                    <ul className="divide-y divide-navy/5">
-                      {topPages.map((p, i) => (
-                        <li key={p.path} className="py-2.5 flex items-center gap-3">
-                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-navy/10 text-navy text-xs font-semibold flex items-center justify-center">
-                            {i + 1}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-mono text-navy truncate">{p.path}</p>
-                            <p className="text-xs text-navy/50">
-                              {p.uniqueVisitors} {p.uniqueVisitors === 1 ? "visitor" : "visitors"}
-                            </p>
-                          </div>
-                          <span className="text-sm font-semibold text-navy">
-                            {p.views.toLocaleString()}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                <CardContent className="py-10">
+                  <EmptyState message="No site activity in this range yet." />
                 </CardContent>
               </Card>
+            ) : (
+              <div className="space-y-4">
+                {dailyBreakdown.map((day) => (
+                  <Card key={day.dayKey} className="border-gold/20 bg-white shadow-sm">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <CardTitle className="text-navy text-base flex items-center gap-2">
+                          <span className="font-serif">{day.dayLabel}</span>
+                          <span className="text-xs font-normal text-navy/50">
+                            {day.dayKey}
+                          </span>
+                        </CardTitle>
+                        <div className="flex items-center gap-3 text-xs">
+                          <span className="flex items-center gap-1.5 text-navy/70">
+                            <Eye className="h-3.5 w-3.5 text-gold" />
+                            <span className="font-semibold text-navy">{day.totalViews}</span>
+                            {day.totalViews === 1 ? "view" : "views"}
+                          </span>
+                          <span className="flex items-center gap-1.5 text-navy/70">
+                            <Users className="h-3.5 w-3.5 text-gold" />
+                            <span className="font-semibold text-navy">{day.visitors.length}</span>
+                            {day.visitors.length === 1 ? "visitor" : "visitors"}
+                          </span>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="grid gap-6 md:grid-cols-2">
+                      {/* Visitors that day */}
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-navy/50 mb-2">
+                          Visitors
+                        </p>
+                        {day.visitors.length === 0 ? (
+                          <p className="text-sm text-navy/40 italic">
+                            No signed-in visitors recorded.
+                          </p>
+                        ) : (
+                          <ul className="space-y-2">
+                            {day.visitors.map((v) => (
+                              <li key={v.key} className="flex items-center gap-2.5">
+                                <span className="flex-shrink-0 h-7 w-7 rounded-full bg-navy/5 flex items-center justify-center">
+                                  <UserIcon className="h-3.5 w-3.5 text-navy/60" />
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-navy truncate">
+                                    {v.name}
+                                  </p>
+                                  {v.email && v.email !== v.name && (
+                                    <p className="text-[11px] text-navy/50 truncate">{v.email}</p>
+                                  )}
+                                </div>
+                                <span className="text-[11px] text-navy/40 flex-shrink-0">
+                                  {formatTime(v.lastSeen)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
 
-              <Card className="border-gold/20 bg-white shadow-sm">
-                <CardHeader>
-                  <CardTitle className="text-navy text-base">Recent Visitors</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {recentVisitors.length === 0 ? (
-                    <EmptyState message="No recent visitors yet." />
-                  ) : (
-                    <ul className="divide-y divide-navy/5 max-h-[400px] overflow-y-auto">
-                      {recentVisitors.map((pv) => (
-                        <li key={pv.id} className="py-2.5 flex items-center gap-3">
-                          <span className="flex-shrink-0 h-8 w-8 rounded-full bg-navy/5 flex items-center justify-center">
-                            <UserIcon className="h-4 w-4 text-navy/60" />
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-medium text-navy truncate">
-                                {pv.userName || pv.userEmail || "Anonymous"}
-                              </p>
-                              {pv.platform && <PlatformBadge platform={pv.platform} />}
-                            </div>
-                            <p className="text-xs font-mono text-navy/60 truncate">
-                              {pv.path === "(site)" ? "site visit" : pv.path}
-                            </p>
-                          </div>
-                          <span className="text-xs text-navy/50 flex-shrink-0">
-                            {formatTime(pv.timestamp)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
+                      {/* Pages viewed that day */}
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-navy/50 mb-2">
+                          Pages
+                        </p>
+                        {day.pages.length === 0 ? (
+                          <p className="text-sm text-navy/40 italic">No page views recorded.</p>
+                        ) : (
+                          <ul className="space-y-1.5">
+                            {day.pages.map((p) => (
+                              <li
+                                key={p.path}
+                                className="flex items-center justify-between gap-3 text-sm"
+                              >
+                                <span className="font-mono text-navy/80 truncate">{p.path}</span>
+                                <span className="font-semibold text-navy flex-shrink-0">
+                                  {p.views.toLocaleString()}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
         </>
       )}
