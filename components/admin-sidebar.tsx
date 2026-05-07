@@ -22,6 +22,7 @@ import {
   FolderOpen,
   Bell,
   Mail,
+  Activity,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
@@ -29,6 +30,7 @@ const menuItems = [
   { href: "/admin/requests", icon: FileText, label: "Requests" },
   { href: "/admin/users", icon: UserCog, label: "User Accounts" },
   { href: "/admin/analytics", icon: BarChart3, label: "Analytics" },
+  { href: "/admin/debug/tracking", icon: Activity, label: "Tracking Debug" },
   { href: "/admin/notifications", icon: Bell, label: "Push Notifications" },
   { href: "/admin/email-blast", icon: Mail, label: "Email Blast" },
   { href: "/admin/announcements", icon: Megaphone, label: "Announcements" },

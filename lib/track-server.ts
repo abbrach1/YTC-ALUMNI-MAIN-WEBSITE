@@ -52,3 +52,36 @@ export function corsJson(
 export function corsPreflight(origin: string | null = null) {
   return corsJson({ ok: true }, { status: 200 }, origin)
 }
+
+/**
+ * Structured one-line log for incoming track requests so they're trivially
+ * grep-able in Vercel logs while debugging Android integration:
+ *
+ *   [track] event=play platform=android auth=yes user=abc@x.com ua="ShiurPod/..."
+ *
+ * Pass minimal fields - we don't want PII in logs beyond what's necessary
+ * to correlate with the in-app debug log on the device.
+ */
+export function logTrack(event: string, info: {
+  ok: boolean
+  platform: string | null
+  hasAuth: boolean
+  userId?: string | null
+  userEmail?: string | null
+  userAgent?: string | null
+  origin?: string | null
+  detail?: string
+}) {
+  const parts = [
+    `[track] event=${event}`,
+    `ok=${info.ok}`,
+    `platform=${info.platform || "unknown"}`,
+    `auth=${info.hasAuth ? "yes" : "no"}`,
+  ]
+  if (info.userId) parts.push(`uid=${info.userId.slice(0, 12)}`)
+  if (info.userEmail) parts.push(`email=${info.userEmail}`)
+  if (info.origin) parts.push(`origin=${info.origin}`)
+  if (info.userAgent) parts.push(`ua="${info.userAgent.slice(0, 80)}"`)
+  if (info.detail) parts.push(`detail=${info.detail}`)
+  console.log(parts.join(" "))
+}
