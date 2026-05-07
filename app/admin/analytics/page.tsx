@@ -58,6 +58,17 @@ interface EngagementEvent {
   timestamp: Date | null
 }
 
+interface PageViewEvent {
+  id: string
+  path: string
+  userId: string | null
+  userEmail: string | null
+  userName: string | null
+  platform: string | null
+  referrer: string | null
+  timestamp: Date | null
+}
+
 interface ShiurInfo {
   id: string
   title: string
@@ -124,6 +135,7 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true)
   const [plays, setPlays] = useState<EngagementEvent[]>([])
   const [downloads, setDownloads] = useState<EngagementEvent[]>([])
+  const [pageViews, setPageViews] = useState<PageViewEvent[]>([])
   const [shiurInfo, setShiurInfo] = useState<Record<string, ShiurInfo>>({})
   const [pageViewTotals, setPageViewTotals] = useState<{
     totalPageViews: number
@@ -147,9 +159,10 @@ export default function AnalyticsPage() {
           return query(collection(db, col))
         }
 
-        const [playsSnap, downloadsSnap, totalsSnap] = await Promise.all([
+        const [playsSnap, downloadsSnap, pageViewsSnap, totalsSnap] = await Promise.all([
           getDocs(buildQuery("shiurPlays")),
           getDocs(buildQuery("shiurDownloads")),
+          getDocs(buildQuery("pageViews")),
           getDoc(doc(db, "analytics", "totals")),
         ])
 
@@ -167,12 +180,29 @@ export default function AnalyticsPage() {
           }
         }
 
+        const mapPageView = (d: any): PageViewEvent => {
+          const data = d.data()
+          const ts = data.timestamp as { toDate?: () => Date } | null | undefined
+          return {
+            id: d.id,
+            path: data.path || "/",
+            userId: data.userId || null,
+            userEmail: data.userEmail || null,
+            userName: data.userName || null,
+            platform: (data.platform as string) || null,
+            referrer: data.referrer || null,
+            timestamp: ts?.toDate ? ts.toDate() : null,
+          }
+        }
+
         const playsData = playsSnap.docs.map(mapEvent)
         const downloadsData = downloadsSnap.docs.map(mapEvent)
+        const pageViewsData = pageViewsSnap.docs.map(mapPageView)
 
         if (cancelled) return
         setPlays(playsData)
         setDownloads(downloadsData)
+        setPageViews(pageViewsData)
         if (totalsSnap.exists()) {
           const data = totalsSnap.data() as Record<string, unknown>
           setPageViewTotals({
@@ -347,6 +377,43 @@ export default function AnalyticsPage() {
       .sort((a, b) => b.total - a.total)
       .slice(0, 10)
   }, [plays, downloads])
+
+  const siteStats = useMemo(() => {
+    const visitors = new Set<string>()
+    pageViews.forEach((pv) => {
+      visitors.add(pv.userId || pv.userEmail || `anon:${pv.id}`)
+    })
+    return {
+      totalViews: pageViews.length,
+      uniqueVisitors: visitors.size,
+    }
+  }, [pageViews])
+
+  const topPages = useMemo(() => {
+    const counts: Record<string, { views: number; visitors: Set<string> }> = {}
+    pageViews.forEach((pv) => {
+      // Strip query strings for grouping but keep the path
+      const path = pv.path.split("?")[0] || "/"
+      if (!counts[path]) counts[path] = { views: 0, visitors: new Set() }
+      counts[path].views += 1
+      counts[path].visitors.add(pv.userId || pv.userEmail || `anon:${pv.id}`)
+    })
+    return Object.entries(counts)
+      .map(([path, c]) => ({
+        path,
+        views: c.views,
+        uniqueVisitors: c.visitors.size,
+      }))
+      .sort((a, b) => b.views - a.views)
+      .slice(0, 10)
+  }, [pageViews])
+
+  const recentVisitors = useMemo(() => {
+    return pageViews
+      .filter((pv) => pv.timestamp)
+      .sort((a, b) => b.timestamp!.getTime() - a.timestamp!.getTime())
+      .slice(0, 25)
+  }, [pageViews])
 
   const recentActivity = useMemo(() => {
     type Row = EngagementEvent & { kind: "play" | "download" }
@@ -665,39 +732,114 @@ export default function AnalyticsPage() {
             </Card>
           </div>
 
-          {/* Site-wide page views (legacy) */}
-          {pageViewTotals && (pageViewTotals.totalPageViews > 0 || pageViewTotals.uniqueVisitors > 0) && (
-            <Card className="border-gold/20 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-navy flex items-center gap-2">
-                  <Eye className="h-5 w-5 text-gold" />
-                  Site-Wide Page Views
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 grid-cols-2">
-                  <div className="bg-navy/5 rounded-lg p-4">
-                    <p className="text-xs font-medium text-navy/60 uppercase tracking-wide mb-1">
-                      Total Page Views
-                    </p>
-                    <p className="text-2xl font-serif font-bold text-navy">
-                      {pageViewTotals.totalPageViews.toLocaleString()}
-                    </p>
-                    <p className="text-xs text-navy/50 mt-1">All time</p>
-                  </div>
-                  <div className="bg-gold/5 rounded-lg p-4">
-                    <p className="text-xs font-medium text-navy/60 uppercase tracking-wide mb-1">
-                      Unique Visitors
-                    </p>
-                    <p className="text-2xl font-serif font-bold text-navy">
-                      {pageViewTotals.uniqueVisitors.toLocaleString()}
-                    </p>
-                    <p className="text-xs text-navy/50 mt-1">All time (daily unique)</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          {/* Site Activity */}
+          <div className="space-y-4">
+            <div className="flex items-end justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="font-serif text-2xl font-bold text-navy flex items-center gap-2">
+                  <Eye className="h-6 w-6 text-gold" />
+                  Site Activity
+                </h2>
+                <p className="text-sm text-navy/60 mt-1">
+                  Page views and visitor activity across the site
+                </p>
+              </div>
+            </div>
+
+            {/* Site stat cards */}
+            <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                icon={<Eye className="h-5 w-5" />}
+                label="Page Views"
+                value={siteStats.totalViews}
+                accent="navy"
+              />
+              <StatCard
+                icon={<Users className="h-5 w-5" />}
+                label="Unique Visitors"
+                value={siteStats.uniqueVisitors}
+                accent="gold"
+              />
+              <StatCard
+                icon={<Eye className="h-5 w-5" />}
+                label="All-Time Views"
+                value={pageViewTotals?.totalPageViews ?? 0}
+                accent="navy"
+              />
+              <StatCard
+                icon={<Users className="h-5 w-5" />}
+                label="All-Time Visitors"
+                value={pageViewTotals?.uniqueVisitors ?? 0}
+                accent="gold"
+              />
+            </div>
+
+            {/* Top pages + recent visitors */}
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card className="border-gold/20 bg-white shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-navy text-base">Top Pages</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {topPages.length === 0 ? (
+                    <EmptyState message="No page views in this range yet." />
+                  ) : (
+                    <ul className="divide-y divide-navy/5">
+                      {topPages.map((p, i) => (
+                        <li key={p.path} className="py-2.5 flex items-center gap-3">
+                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-navy/10 text-navy text-xs font-semibold flex items-center justify-center">
+                            {i + 1}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-mono text-navy truncate">{p.path}</p>
+                            <p className="text-xs text-navy/50">
+                              {p.uniqueVisitors} {p.uniqueVisitors === 1 ? "visitor" : "visitors"}
+                            </p>
+                          </div>
+                          <span className="text-sm font-semibold text-navy">
+                            {p.views.toLocaleString()}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border-gold/20 bg-white shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-navy text-base">Recent Visitors</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {recentVisitors.length === 0 ? (
+                    <EmptyState message="No recent visitors yet." />
+                  ) : (
+                    <ul className="divide-y divide-navy/5 max-h-[400px] overflow-y-auto">
+                      {recentVisitors.map((pv) => (
+                        <li key={pv.id} className="py-2.5 flex items-center gap-3">
+                          <span className="flex-shrink-0 h-8 w-8 rounded-full bg-navy/5 flex items-center justify-center">
+                            <UserIcon className="h-4 w-4 text-navy/60" />
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-medium text-navy truncate">
+                                {pv.userName || pv.userEmail || "Anonymous"}
+                              </p>
+                              {pv.platform && <PlatformBadge platform={pv.platform} />}
+                            </div>
+                            <p className="text-xs font-mono text-navy/60 truncate">{pv.path}</p>
+                          </div>
+                          <span className="text-xs text-navy/50 flex-shrink-0">
+                            {formatTime(pv.timestamp)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
         </>
       )}
     </div>
