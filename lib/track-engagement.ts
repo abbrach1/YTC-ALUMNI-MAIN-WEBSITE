@@ -1,8 +1,21 @@
 import { addDoc, collection, doc, increment, serverTimestamp, updateDoc } from "firebase/firestore"
 import type { User } from "firebase/auth"
 import { db } from "./firebase"
+import { getPlatform } from "./platform"
 
 type EngagementUser = Pick<User, "uid" | "email" | "displayName"> | null | undefined
+
+function buildEventBase(user: EngagementUser) {
+  const platform = getPlatform()
+  return {
+    userId: user?.uid || null,
+    userEmail: user?.email || null,
+    userName: user?.displayName || null,
+    platform,
+    userAgent: typeof navigator !== "undefined" ? (navigator.userAgent || null) : null,
+    timestamp: serverTimestamp(),
+  }
+}
 
 /**
  * Logs a play event to the `shiurPlays` collection AND increments the shiur's playCount.
@@ -22,10 +35,7 @@ export async function trackPlay(shiurId: string, user: EngagementUser): Promise<
   try {
     await addDoc(collection(db, "shiurPlays"), {
       shiurId,
-      userId: user?.uid || null,
-      userEmail: user?.email || null,
-      userName: user?.displayName || null,
-      timestamp: serverTimestamp(),
+      ...buildEventBase(user),
     })
   } catch (err) {
     console.error("[v0] Error logging play event:", err)
@@ -47,10 +57,7 @@ export async function trackDownload(shiurId: string, user: EngagementUser): Prom
   try {
     await addDoc(collection(db, "shiurDownloads"), {
       shiurId,
-      userId: user?.uid || null,
-      userEmail: user?.email || null,
-      userName: user?.displayName || null,
-      timestamp: serverTimestamp(),
+      ...buildEventBase(user),
     })
   } catch (err) {
     console.error("[v0] Error logging download event:", err)

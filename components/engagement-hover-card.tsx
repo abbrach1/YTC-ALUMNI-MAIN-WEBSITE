@@ -5,12 +5,14 @@ import { collection, getDocs, query, where, orderBy, limit } from "firebase/fire
 import { db } from "@/lib/firebase"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import { Loader2, User } from "lucide-react"
+import { platformLabel } from "@/lib/platform"
 
 interface EngagementEntry {
   id: string
   userEmail: string | null
   userName: string | null
   userId: string | null
+  platform: string | null
   timestamp: Date | null
 }
 
@@ -62,6 +64,7 @@ export function EngagementHoverCard({ shiurId, type, total, children }: Engageme
           userEmail: (data.userEmail as string) || null,
           userName: (data.userName as string) || null,
           userId: (data.userId as string) || null,
+          platform: (data.platform as string) || null,
           timestamp: ts?.toDate ? ts.toDate() : null,
         }
       })
@@ -159,9 +162,24 @@ export function EngagementHoverCard({ shiurId, type, total, children }: Engageme
                     <User className="h-3.5 w-3.5 text-navy/60" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-navy truncate">
-                      {entry.userName || entry.userEmail || "Anonymous"}
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-navy truncate">
+                        {entry.userName || entry.userEmail || "Anonymous"}
+                      </p>
+                      {entry.platform && (
+                        <span
+                          className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                            entry.platform === "android"
+                              ? "bg-green-100 text-green-700"
+                              : entry.platform === "ios" || entry.platform === "ipados"
+                                ? "bg-blue-100 text-blue-700"
+                                : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {platformLabel(entry.platform)}
+                        </span>
+                      )}
+                    </div>
                     {entry.userName && entry.userEmail && (
                       <p className="text-[11px] text-muted-foreground truncate">{entry.userEmail}</p>
                     )}
