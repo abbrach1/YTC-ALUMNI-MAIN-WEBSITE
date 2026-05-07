@@ -69,6 +69,17 @@ interface PageViewEvent {
   timestamp: Date | null
 }
 
+interface VisitorRecord {
+  email: string | null
+  name: string
+  lastSeen: Date | null
+}
+
+interface DailyAggregate {
+  pages: Record<string, { views: number; lastVisit: Date | null }>
+  visitors: VisitorRecord[]
+}
+
 interface ShiurInfo {
   id: string
   title: string
@@ -136,6 +147,8 @@ export default function AnalyticsPage() {
   const [plays, setPlays] = useState<EngagementEvent[]>([])
   const [downloads, setDownloads] = useState<EngagementEvent[]>([])
   const [pageViews, setPageViews] = useState<PageViewEvent[]>([])
+  const [dailyAggregates, setDailyAggregates] = useState<Record<string, DailyAggregate>>({})
+  const [dateRangeList, setDateRangeList] = useState<string[]>([])
   const [shiurInfo, setShiurInfo] = useState<Record<string, ShiurInfo>>({})
   const [pageViewTotals, setPageViewTotals] = useState<{
     totalPageViews: number
@@ -213,60 +226,61 @@ export default function AnalyticsPage() {
         const downloadsData = downloadsSnap.docs.map(mapEvent)
         const pageViewsData = pageViewsSnap.docs.map(mapPageView)
 
-        // Convert legacy analytics/daily/{date}/{pageKey} docs into PageViewEvent shape
-        // so the dashboard's existing display logic just works.
-        const legacyPageViews: PageViewEvent[] = []
+        // Build structured daily aggregates from legacy analytics/daily/{date}/* docs.
+        // No event-expansion - we read counts directly from the page-counter docs and
+        // visitor arrays directly from the _visitors doc. Days with no data become
+        // empty aggregates so the UI can still show a row for that date.
+        const aggregates: Record<string, DailyAggregate> = {}
+        dateList.forEach((date) => {
+          aggregates[date] = { pages: {}, visitors: [] }
+        })
         dailySnaps.forEach((snap, idx) => {
           if (!snap) return
           const date = dateList[idx]
+          const bucket = aggregates[date]
           snap.docs.forEach((d) => {
             const data = d.data() as Record<string, unknown>
-            // _visitors doc holds an array of users seen that day - expand each
             if (d.id === "_visitors") {
-              const users = (data.users as Array<{ email?: string; name?: string; lastSeen?: string }>) || []
-              users.forEach((u, i) => {
-                const ts = u.lastSeen ? new Date(u.lastSeen) : new Date(date)
-                legacyPageViews.push({
-                  id: `${date}_visitor_${i}`,
-                  path: "(site)",
-                  userId: null,
-                  userEmail: u.email || null,
-                  userName: u.name || null,
-                  platform: null,
-                  referrer: null,
-                  timestamp: isNaN(ts.getTime()) ? new Date(date) : ts,
-                })
+              const users =
+                (data.users as Array<{ email?: string; name?: string; lastSeen?: string }>) || []
+              // De-dupe by email so multiple writes per user only show once
+              const seen: Record<string, VisitorRecord> = {}
+              users.forEach((u) => {
+                const email = u.email || "anon"
+                const ts = u.lastSeen ? new Date(u.lastSeen) : null
+                const existing = seen[email]
+                if (
+                  !existing ||
+                  (ts && existing.lastSeen && ts > existing.lastSeen) ||
+                  (ts && !existing.lastSeen)
+                ) {
+                  seen[email] = {
+                    email: u.email || null,
+                    name: u.name || u.email || "Anonymous",
+                    lastSeen: ts && !isNaN(ts.getTime()) ? ts : null,
+                  }
+                }
               })
+              bucket.visitors = Object.values(seen)
               return
             }
-            // Page-view counter doc - expand into N events for the day so per-day
-            // counts and top-pages aggregates work without changing display code.
             const path = (data.path as string) || "/"
             const views = (data.views as number) || 0
             const lastVisit = data.lastVisit as string | undefined
-            const ts = lastVisit ? new Date(lastVisit) : new Date(date)
-            for (let i = 0; i < views; i++) {
-              legacyPageViews.push({
-                id: `${date}_${d.id}_${i}`,
-                path,
-                userId: null,
-                userEmail: null,
-                userName: null,
-                platform: null,
-                referrer: null,
-                timestamp: isNaN(ts.getTime()) ? new Date(date) : ts,
-              })
+            const ts = lastVisit ? new Date(lastVisit) : null
+            bucket.pages[path] = {
+              views: (bucket.pages[path]?.views || 0) + views,
+              lastVisit: ts && !isNaN(ts.getTime()) ? ts : null,
             }
           })
         })
 
-        // Merge: native /api/track/pageview events + legacy daily counters
-        const mergedPageViews = [...pageViewsData, ...legacyPageViews]
-
         if (cancelled) return
         setPlays(playsData)
         setDownloads(downloadsData)
-        setPageViews(mergedPageViews)
+        setPageViews(pageViewsData)
+        setDailyAggregates(aggregates)
+        setDateRangeList(dateList)
         if (totalsSnap.exists()) {
           const data = totalsSnap.data() as Record<string, unknown>
           setPageViewTotals({
@@ -442,116 +456,174 @@ export default function AnalyticsPage() {
       .slice(0, 10)
   }, [plays, downloads])
 
-  const siteStats = useMemo(() => {
-    // "(site)" entries are visitor-only records from the legacy daily _visitors doc -
-    // they don't represent a page view. Real page views have a real path.
-    const realPageViews = pageViews.filter((pv) => pv.path !== "(site)")
-    const visitors = new Set<string>()
-    pageViews.forEach((pv) => {
-      const id = pv.userId || pv.userEmail
-      if (id) visitors.add(id)
-    })
-    return {
-      totalViews: realPageViews.length,
-      uniqueVisitors: visitors.size,
-    }
-  }, [pageViews])
-
-  const topPages = useMemo(() => {
-    const counts: Record<string, { views: number; visitors: Set<string> }> = {}
-    pageViews.forEach((pv) => {
-      // Skip the legacy visitor-roll placeholder
-      if (pv.path === "(site)") return
-      // Strip query strings for grouping but keep the path
-      const path = pv.path.split("?")[0] || "/"
-      if (!counts[path]) counts[path] = { views: 0, visitors: new Set() }
-      counts[path].views += 1
-      const id = pv.userId || pv.userEmail
-      if (id) counts[path].visitors.add(id)
-    })
-    return Object.entries(counts)
-      .map(([path, c]) => ({
-        path,
-        views: c.views,
-        uniqueVisitors: c.visitors.size,
-      }))
-      .sort((a, b) => b.views - a.views)
-      .slice(0, 10)
-  }, [pageViews])
-
-  const recentVisitors = useMemo(() => {
-    // Prefer entries that have a user attached (the legacy _visitors records,
-    // and any future API events with auth). Anonymous page-counter expansions
-    // are useful for totals but not for a "who visited recently" list.
-    return pageViews
-      .filter((pv) => pv.timestamp && (pv.userEmail || pv.userName || pv.userId))
-      .sort((a, b) => b.timestamp!.getTime() - a.timestamp!.getTime())
-      .slice(0, 25)
-  }, [pageViews])
-
-  // Per-day breakdown: for each day, who visited and which pages got how many views.
+  // Per-day breakdown: for each day in the selected range, who visited and which
+  // pages got how many views. Reads from BOTH the legacy daily aggregates
+  // (analytics/daily/{date}/...) AND any flat pageViews/plays/downloads events.
+  // Platform info is collected per visitor so we can badge Android/iOS/etc.
   const dailyBreakdown = useMemo(() => {
+    type VisitorBucket = {
+      name: string
+      email: string | null
+      lastSeen: Date | null
+      platforms: Set<string>
+    }
     type Day = {
       dayKey: string
       dayLabel: string
       totalViews: number
       pages: { path: string; views: number }[]
-      visitors: { key: string; name: string; email: string | null; lastSeen: Date | null }[]
+      visitors: {
+        key: string
+        name: string
+        email: string | null
+        lastSeen: Date | null
+        platforms: string[]
+      }[]
     }
-    const byDay: Record<string, {
-      totalViews: number
-      pages: Record<string, number>
-      visitorMap: Record<string, { name: string; email: string | null; lastSeen: Date | null }>
-    }> = {}
 
+    const byDay: Record<
+      string,
+      {
+        pages: Record<string, number>
+        visitorMap: Record<string, VisitorBucket>
+      }
+    > = {}
+
+    const ensureDay = (date: string) => {
+      if (!byDay[date]) byDay[date] = { pages: {}, visitorMap: {} }
+      return byDay[date]
+    }
+
+    const upsertVisitor = (
+      date: string,
+      key: string,
+      info: { name: string; email: string | null; lastSeen: Date | null; platform: string | null },
+    ) => {
+      const bucket = ensureDay(date)
+      const existing = bucket.visitorMap[key]
+      if (!existing) {
+        bucket.visitorMap[key] = {
+          name: info.name,
+          email: info.email,
+          lastSeen: info.lastSeen,
+          platforms: new Set(info.platform ? [info.platform] : []),
+        }
+        return
+      }
+      // Newer lastSeen wins for name/email; platforms accumulate
+      if (
+        info.lastSeen &&
+        (!existing.lastSeen || info.lastSeen > existing.lastSeen)
+      ) {
+        existing.name = info.name
+        existing.email = info.email ?? existing.email
+        existing.lastSeen = info.lastSeen
+      }
+      if (info.platform) existing.platforms.add(info.platform)
+    }
+
+    // Seed each day in range so days with zero data still render
+    dateRangeList.forEach((date) => ensureDay(date))
+
+    // Legacy daily aggregates - no platform info available, leaves platforms empty
+    Object.entries(dailyAggregates).forEach(([date, agg]) => {
+      const bucket = ensureDay(date)
+      Object.entries(agg.pages).forEach(([path, p]) => {
+        bucket.pages[path] = (bucket.pages[path] || 0) + p.views
+      })
+      agg.visitors.forEach((v) => {
+        const key = v.email || v.name
+        upsertVisitor(date, key, {
+          name: v.name,
+          email: v.email,
+          lastSeen: v.lastSeen,
+          platform: null,
+        })
+      })
+    })
+
+    // Flat /api/track/pageview events - DO carry platform, this is where Android
+    // and iOS app visits will surface from
     pageViews.forEach((pv) => {
       if (!pv.timestamp) return
       const dayKey = formatDayKey(pv.timestamp)
-      if (!byDay[dayKey]) {
-        byDay[dayKey] = { totalViews: 0, pages: {}, visitorMap: {} }
-      }
-      const bucket = byDay[dayKey]
-      // Page-view counters (anonymous expansions) and real path events both count
-      if (pv.path !== "(site)") {
-        const path = pv.path.split("?")[0] || "/"
-        bucket.totalViews += 1
-        bucket.pages[path] = (bucket.pages[path] || 0) + 1
-      }
-      // Track visitor identities (any record with a user)
+      const bucket = ensureDay(dayKey)
+      const path = pv.path.split("?")[0] || "/"
+      bucket.pages[path] = (bucket.pages[path] || 0) + 1
       const id = pv.userEmail || pv.userId
       if (id) {
-        const existing = bucket.visitorMap[id]
-        const ts = pv.timestamp
-        if (!existing || (existing.lastSeen && ts > existing.lastSeen) || !existing.lastSeen) {
-          bucket.visitorMap[id] = {
-            name: pv.userName || pv.userEmail || "Anonymous",
-            email: pv.userEmail,
-            lastSeen: ts,
-          }
-        }
+        upsertVisitor(dayKey, id, {
+          name: pv.userName || pv.userEmail || "Anonymous",
+          email: pv.userEmail,
+          lastSeen: pv.timestamp,
+          platform: pv.platform,
+        })
       }
     })
 
+    // Plays and downloads also identify the visitor + platform. A user who
+    // only listened to shiurim from the Android app should still show up
+    // as an Android visitor for the day even without a /pageview event.
+    const enrichFromEngagement = (events: EngagementEvent[]) => {
+      events.forEach((e) => {
+        if (!e.timestamp) return
+        const id = e.userEmail || e.userId
+        if (!id) return
+        const dayKey = formatDayKey(e.timestamp)
+        upsertVisitor(dayKey, id, {
+          name: e.userName || e.userEmail || "Anonymous",
+          email: e.userEmail,
+          lastSeen: e.timestamp,
+          platform: e.platform,
+        })
+      })
+    }
+    enrichFromEngagement(plays)
+    enrichFromEngagement(downloads)
+
     const days: Day[] = Object.entries(byDay)
-      .map(([dayKey, b]) => ({
-        dayKey,
-        dayLabel: formatDayLabel(dayKey),
-        totalViews: b.totalViews,
-        pages: Object.entries(b.pages)
-          .map(([path, views]) => ({ path, views }))
-          .sort((a, b) => b.views - a.views),
-        visitors: Object.entries(b.visitorMap)
-          .map(([key, v]) => ({ key, ...v }))
-          .sort((a, b) => {
-            const at = a.lastSeen?.getTime() ?? 0
-            const bt = b.lastSeen?.getTime() ?? 0
-            return bt - at
-          }),
-      }))
+      .map(([dayKey, b]) => {
+        const totalViews = Object.values(b.pages).reduce((a, n) => a + n, 0)
+        return {
+          dayKey,
+          dayLabel: formatDayLabel(dayKey),
+          totalViews,
+          pages: Object.entries(b.pages)
+            .map(([path, views]) => ({ path, views }))
+            .sort((a, b) => b.views - a.views),
+          visitors: Object.entries(b.visitorMap)
+            .map(([key, v]) => ({
+              key,
+              name: v.name,
+              email: v.email,
+              lastSeen: v.lastSeen,
+              platforms: Array.from(v.platforms).sort(),
+            }))
+            .sort((a, b) => {
+              const at = a.lastSeen?.getTime() ?? 0
+              const bt = b.lastSeen?.getTime() ?? 0
+              return bt - at
+            }),
+        }
+      })
       .sort((a, b) => (a.dayKey < b.dayKey ? 1 : -1))
 
     return days
-  }, [pageViews])
+  }, [dateRangeList, dailyAggregates, pageViews, plays, downloads])
+
+  const siteStats = useMemo(() => {
+    const totalViews = dailyBreakdown.reduce((sum, d) => sum + d.totalViews, 0)
+    const visitors = new Set<string>()
+    dailyBreakdown.forEach((d) => {
+      d.visitors.forEach((v) => visitors.add(v.email || v.name))
+    })
+    return {
+      totalViews,
+      uniqueVisitors: visitors.size,
+    }
+  }, [dailyBreakdown])
+
+
 
   const recentActivity = useMemo(() => {
     type Row = EngagementEvent & { kind: "play" | "download" }
@@ -963,9 +1035,14 @@ export default function AnalyticsPage() {
                                   <UserIcon className="h-3.5 w-3.5 text-navy/60" />
                                 </span>
                                 <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-medium text-navy truncate">
-                                    {v.name}
-                                  </p>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <p className="text-sm font-medium text-navy truncate">
+                                      {v.name}
+                                    </p>
+                                    {v.platforms.map((p) => (
+                                      <PlatformBadge key={p} platform={p} />
+                                    ))}
+                                  </div>
                                   {v.email && v.email !== v.name && (
                                     <p className="text-[11px] text-navy/50 truncate">{v.email}</p>
                                   )}
