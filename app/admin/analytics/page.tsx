@@ -159,11 +159,25 @@ export default function AnalyticsPage() {
           return query(collection(db, col))
         }
 
-        const [playsSnap, downloadsSnap, pageViewsSnap, totalsSnap] = await Promise.all([
+        // Build a list of dates to fetch from legacy analytics/daily/{date}/* schema.
+        // For "all" timeframe, fall back to last 365 days as a reasonable upper bound.
+        const dateList: string[] = []
+        const daysToFetch = range === "all" ? 365 : range === "90d" ? 90 : range === "30d" ? 30 : 7
+        for (let i = 0; i < daysToFetch; i++) {
+          const d = new Date()
+          d.setHours(0, 0, 0, 0)
+          d.setDate(d.getDate() - i)
+          dateList.push(d.toISOString().split("T")[0])
+        }
+
+        const [playsSnap, downloadsSnap, pageViewsSnap, totalsSnap, ...dailySnaps] = await Promise.all([
           getDocs(buildQuery("shiurPlays")),
           getDocs(buildQuery("shiurDownloads")),
           getDocs(buildQuery("pageViews")),
           getDoc(doc(db, "analytics", "totals")),
+          ...dateList.map((date) =>
+            getDocs(collection(db, "analytics", "daily", date)).catch(() => null),
+          ),
         ])
 
         const mapEvent = (d: any): EngagementEvent => {
@@ -199,10 +213,60 @@ export default function AnalyticsPage() {
         const downloadsData = downloadsSnap.docs.map(mapEvent)
         const pageViewsData = pageViewsSnap.docs.map(mapPageView)
 
+        // Convert legacy analytics/daily/{date}/{pageKey} docs into PageViewEvent shape
+        // so the dashboard's existing display logic just works.
+        const legacyPageViews: PageViewEvent[] = []
+        dailySnaps.forEach((snap, idx) => {
+          if (!snap) return
+          const date = dateList[idx]
+          snap.docs.forEach((d) => {
+            const data = d.data() as Record<string, unknown>
+            // _visitors doc holds an array of users seen that day - expand each
+            if (d.id === "_visitors") {
+              const users = (data.users as Array<{ email?: string; name?: string; lastSeen?: string }>) || []
+              users.forEach((u, i) => {
+                const ts = u.lastSeen ? new Date(u.lastSeen) : new Date(date)
+                legacyPageViews.push({
+                  id: `${date}_visitor_${i}`,
+                  path: "(site)",
+                  userId: null,
+                  userEmail: u.email || null,
+                  userName: u.name || null,
+                  platform: null,
+                  referrer: null,
+                  timestamp: isNaN(ts.getTime()) ? new Date(date) : ts,
+                })
+              })
+              return
+            }
+            // Page-view counter doc - expand into N events for the day so per-day
+            // counts and top-pages aggregates work without changing display code.
+            const path = (data.path as string) || "/"
+            const views = (data.views as number) || 0
+            const lastVisit = data.lastVisit as string | undefined
+            const ts = lastVisit ? new Date(lastVisit) : new Date(date)
+            for (let i = 0; i < views; i++) {
+              legacyPageViews.push({
+                id: `${date}_${d.id}_${i}`,
+                path,
+                userId: null,
+                userEmail: null,
+                userName: null,
+                platform: null,
+                referrer: null,
+                timestamp: isNaN(ts.getTime()) ? new Date(date) : ts,
+              })
+            }
+          })
+        })
+
+        // Merge: native /api/track/pageview events + legacy daily counters
+        const mergedPageViews = [...pageViewsData, ...legacyPageViews]
+
         if (cancelled) return
         setPlays(playsData)
         setDownloads(downloadsData)
-        setPageViews(pageViewsData)
+        setPageViews(mergedPageViews)
         if (totalsSnap.exists()) {
           const data = totalsSnap.data() as Record<string, unknown>
           setPageViewTotals({
@@ -379,12 +443,16 @@ export default function AnalyticsPage() {
   }, [plays, downloads])
 
   const siteStats = useMemo(() => {
+    // "(site)" entries are visitor-only records from the legacy daily _visitors doc -
+    // they don't represent a page view. Real page views have a real path.
+    const realPageViews = pageViews.filter((pv) => pv.path !== "(site)")
     const visitors = new Set<string>()
     pageViews.forEach((pv) => {
-      visitors.add(pv.userId || pv.userEmail || `anon:${pv.id}`)
+      const id = pv.userId || pv.userEmail
+      if (id) visitors.add(id)
     })
     return {
-      totalViews: pageViews.length,
+      totalViews: realPageViews.length,
       uniqueVisitors: visitors.size,
     }
   }, [pageViews])
@@ -392,11 +460,14 @@ export default function AnalyticsPage() {
   const topPages = useMemo(() => {
     const counts: Record<string, { views: number; visitors: Set<string> }> = {}
     pageViews.forEach((pv) => {
+      // Skip the legacy visitor-roll placeholder
+      if (pv.path === "(site)") return
       // Strip query strings for grouping but keep the path
       const path = pv.path.split("?")[0] || "/"
       if (!counts[path]) counts[path] = { views: 0, visitors: new Set() }
       counts[path].views += 1
-      counts[path].visitors.add(pv.userId || pv.userEmail || `anon:${pv.id}`)
+      const id = pv.userId || pv.userEmail
+      if (id) counts[path].visitors.add(id)
     })
     return Object.entries(counts)
       .map(([path, c]) => ({
@@ -409,8 +480,11 @@ export default function AnalyticsPage() {
   }, [pageViews])
 
   const recentVisitors = useMemo(() => {
+    // Prefer entries that have a user attached (the legacy _visitors records,
+    // and any future API events with auth). Anonymous page-counter expansions
+    // are useful for totals but not for a "who visited recently" list.
     return pageViews
-      .filter((pv) => pv.timestamp)
+      .filter((pv) => pv.timestamp && (pv.userEmail || pv.userName || pv.userId))
       .sort((a, b) => b.timestamp!.getTime() - a.timestamp!.getTime())
       .slice(0, 25)
   }, [pageViews])
@@ -827,7 +901,9 @@ export default function AnalyticsPage() {
                               </p>
                               {pv.platform && <PlatformBadge platform={pv.platform} />}
                             </div>
-                            <p className="text-xs font-mono text-navy/60 truncate">{pv.path}</p>
+                            <p className="text-xs font-mono text-navy/60 truncate">
+                              {pv.path === "(site)" ? "site visit" : pv.path}
+                            </p>
                           </div>
                           <span className="text-xs text-navy/50 flex-shrink-0">
                             {formatTime(pv.timestamp)}
