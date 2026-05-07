@@ -1,309 +1,769 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { collection, doc, getDoc, getDocs } from "firebase/firestore"
+import { useEffect, useMemo, useState } from "react"
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  Timestamp,
+  where,
+} from "firebase/firestore"
 import { db } from "@/lib/firebase"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Users, Eye, TrendingUp, UserCheck, BarChart3 } from "lucide-react"
+import { platformLabel } from "@/lib/platform"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart"
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  XAxis,
+  YAxis,
+} from "recharts"
+import {
+  BarChart3,
+  Download,
+  Eye,
+  Loader2,
+  Play,
+  Smartphone,
+  TrendingUp,
+  User as UserIcon,
+  Users,
+} from "lucide-react"
 
-interface UserVisit {
-  email: string
-  name: string
-  lastSeen: string
+interface EngagementEvent {
+  id: string
+  shiurId: string
+  userId: string | null
+  userEmail: string | null
+  userName: string | null
+  platform: string | null
+  timestamp: Date | null
 }
 
-interface DailyStats {
-  date: string
-  views: number
-  pages: { path: string; views: number }[]
-  visitors: UserVisit[]
+interface ShiurInfo {
+  id: string
+  title: string
+  rebbe?: string
+}
+
+type Range = "7d" | "30d" | "90d" | "all"
+
+const RANGE_LABELS: Record<Range, string> = {
+  "7d": "Last 7 days",
+  "30d": "Last 30 days",
+  "90d": "Last 90 days",
+  all: "All time",
+}
+
+const PLATFORM_COLORS: Record<string, string> = {
+  android: "#22c55e",
+  ios: "#3b82f6",
+  ipados: "#60a5fa",
+  "web-desktop": "#0c1a35",
+  "web-mobile": "#6b7280",
+  unknown: "#9ca3af",
+}
+
+function rangeToCutoff(range: Range): Date | null {
+  if (range === "all") return null
+  const now = new Date()
+  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90
+  const d = new Date(now)
+  d.setDate(d.getDate() - days)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+function formatDayKey(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+
+function formatDayLabel(key: string): string {
+  const d = new Date(key + "T00:00:00")
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+}
+
+function formatTime(d: Date | null): string {
+  if (!d) return "—"
+  const now = Date.now()
+  const diff = now - d.getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 7) return `${days}d ago`
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+}
+
+function userLabel(e: EngagementEvent): string {
+  return e.userName || e.userEmail || "Anonymous"
 }
 
 export default function AnalyticsPage() {
-  const [totals, setTotals] = useState<{
+  const [range, setRange] = useState<Range>("30d")
+  const [loading, setLoading] = useState(true)
+  const [plays, setPlays] = useState<EngagementEvent[]>([])
+  const [downloads, setDownloads] = useState<EngagementEvent[]>([])
+  const [shiurInfo, setShiurInfo] = useState<Record<string, ShiurInfo>>({})
+  const [pageViewTotals, setPageViewTotals] = useState<{
     totalPageViews: number
     uniqueVisitors: number
-    [key: string]: number
   } | null>(null)
-  const [dailyStats, setDailyStats] = useState<DailyStats[]>([])
-  const [loading, setLoading] = useState(true)
 
+  // Fetch engagement events whenever range changes
   useEffect(() => {
-    const fetchAnalytics = async () => {
+    let cancelled = false
+    const load = async () => {
+      setLoading(true)
       try {
-        // Fetch totals
-        const totalsDoc = await getDoc(doc(db, "analytics", "totals"))
-        if (totalsDoc.exists()) {
-          setTotals(totalsDoc.data() as any)
+        const cutoff = rangeToCutoff(range)
+        const buildQuery = (col: string) => {
+          if (cutoff) {
+            return query(
+              collection(db, col),
+              where("timestamp", ">=", Timestamp.fromDate(cutoff)),
+            )
+          }
+          return query(collection(db, col))
         }
 
-        // Fetch last 7 days
-        const last7Days: DailyStats[] = []
-        for (let i = 0; i < 7; i++) {
-          const date = new Date()
-          date.setDate(date.getDate() - i)
-          const dateStr = date.toISOString().split("T")[0]
+        const [playsSnap, downloadsSnap, totalsSnap] = await Promise.all([
+          getDocs(buildQuery("shiurPlays")),
+          getDocs(buildQuery("shiurDownloads")),
+          getDoc(doc(db, "analytics", "totals")),
+        ])
 
-          const dayRef = collection(db, "analytics", "daily", dateStr)
-          const dayDocs = await getDocs(dayRef)
-
-          let dayViews = 0
-          const pages: { path: string; views: number }[] = []
-          let visitors: UserVisit[] = []
-
-          dayDocs.forEach((docSnapshot) => {
-            const data = docSnapshot.data()
-            if (docSnapshot.id === "_visitors") {
-              visitors = data.users || []
-            } else {
-              dayViews += data.views || 0
-              pages.push({ path: data.path, views: data.views || 0 })
-            }
-          })
-
-          if (dayViews > 0 || i < 3) {
-            last7Days.push({
-              date: dateStr,
-              views: dayViews,
-              pages: pages.sort((a, b) => b.views - a.views),
-              visitors: visitors,
-            })
+        const mapEvent = (d: any): EngagementEvent => {
+          const data = d.data()
+          const ts = data.timestamp as { toDate?: () => Date } | null | undefined
+          return {
+            id: d.id,
+            shiurId: data.shiurId || "",
+            userId: data.userId || null,
+            userEmail: data.userEmail || null,
+            userName: data.userName || null,
+            platform: (data.platform as string) || null,
+            timestamp: ts?.toDate ? ts.toDate() : null,
           }
         }
 
-        setDailyStats(last7Days)
-      } catch (error) {
-        console.error("Error fetching analytics:", error)
+        const playsData = playsSnap.docs.map(mapEvent)
+        const downloadsData = downloadsSnap.docs.map(mapEvent)
+
+        if (cancelled) return
+        setPlays(playsData)
+        setDownloads(downloadsData)
+        if (totalsSnap.exists()) {
+          const data = totalsSnap.data() as Record<string, unknown>
+          setPageViewTotals({
+            totalPageViews: (data.totalPageViews as number) || 0,
+            uniqueVisitors: (data.uniqueVisitors as number) || 0,
+          })
+        }
+      } catch (err) {
+        console.error("[v0] Error loading analytics:", err)
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
-
-    fetchAnalytics()
-  }, [])
-
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr)
-    return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
-  }
-
-  const formatTime = (isoString: string) => {
-    const date = new Date(isoString)
-    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-  }
-
-  const getPageName = (path: string) => {
-    const names: { [key: string]: string } = {
-      "/": "Home",
-      "/shiurim": "Shiurim",
-      "/events": "Events & Simchos",
-      "/about": "About",
-      "/login": "Login",
-      "/register": "Register",
-      "/upload-shiur": "Upload Shiur",
+    load()
+    return () => {
+      cancelled = true
     }
-    return names[path] || path
-  }
+  }, [range])
 
-  // Get top pages from totals
-  const topPages = totals
-    ? Object.entries(totals)
-        .filter(([key]) => !["totalPageViews", "uniqueVisitors", "lastUpdated"].includes(key))
-        .map(([key, value]) => ({
-          path: key === "home" ? "/" : `/${key.replace(/_/g, "/")}`,
-          views: value as number,
-        }))
-        .sort((a, b) => b.views - a.views)
-        .slice(0, 5)
-    : []
+  // Fetch shiur metadata once we have IDs
+  useEffect(() => {
+    let cancelled = false
+    const ids = new Set<string>()
+    plays.forEach((p) => p.shiurId && ids.add(p.shiurId))
+    downloads.forEach((d) => d.shiurId && ids.add(d.shiurId))
+    const missing = Array.from(ids).filter((id) => !shiurInfo[id])
+    if (missing.length === 0) return
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold"></div>
-      </div>
-    )
+    const load = async () => {
+      try {
+        const snap = await getDocs(collection(db, "shiurim"))
+        if (cancelled) return
+        const next: Record<string, ShiurInfo> = { ...shiurInfo }
+        snap.forEach((d) => {
+          const data = d.data() as Record<string, unknown>
+          next[d.id] = {
+            id: d.id,
+            title: (data.title as string) || "Untitled",
+            rebbe: (data.rebbe as string) || (data.rabbi as string) || undefined,
+          }
+        })
+        setShiurInfo(next)
+      } catch (err) {
+        console.error("[v0] Error loading shiur info:", err)
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plays, downloads])
+
+  const stats = useMemo(() => {
+    const uniqueListeners = new Set<string>()
+    plays.forEach((p) => uniqueListeners.add(p.userId || p.userEmail || `anon:${p.id}`))
+
+    const platformCounts: Record<string, number> = {}
+    plays.forEach((p) => {
+      const key = p.platform || "unknown"
+      platformCounts[key] = (platformCounts[key] || 0) + 1
+    })
+    downloads.forEach((d) => {
+      const key = d.platform || "unknown"
+      platformCounts[key] = (platformCounts[key] || 0) + 1
+    })
+
+    const topPlatform =
+      Object.entries(platformCounts).sort(([, a], [, b]) => b - a)[0]?.[0] || null
+
+    return {
+      totalPlays: plays.length,
+      totalDownloads: downloads.length,
+      uniqueListeners: uniqueListeners.size,
+      topPlatform,
+      platformCounts,
+    }
+  }, [plays, downloads])
+
+  const dailyData = useMemo(() => {
+    const cutoff = rangeToCutoff(range)
+    const start =
+      cutoff ||
+      (() => {
+        const d = new Date()
+        d.setDate(d.getDate() - 90)
+        d.setHours(0, 0, 0, 0)
+        return d
+      })()
+
+    const map: Record<string, { plays: number; downloads: number }> = {}
+    const cursor = new Date(start)
+    while (cursor <= new Date()) {
+      map[formatDayKey(cursor)] = { plays: 0, downloads: 0 }
+      cursor.setDate(cursor.getDate() + 1)
+    }
+
+    plays.forEach((p) => {
+      if (!p.timestamp) return
+      const key = formatDayKey(p.timestamp)
+      if (map[key]) map[key].plays += 1
+    })
+    downloads.forEach((d) => {
+      if (!d.timestamp) return
+      const key = formatDayKey(d.timestamp)
+      if (map[key]) map[key].downloads += 1
+    })
+
+    return Object.keys(map)
+      .sort()
+      .map((day) => ({ day, ...map[day] }))
+  }, [plays, downloads, range])
+
+  const platformPieData = useMemo(() => {
+    return Object.entries(stats.platformCounts)
+      .map(([platform, count]) => ({
+        platform,
+        label: platformLabel(platform),
+        count,
+        color: PLATFORM_COLORS[platform] || PLATFORM_COLORS.unknown,
+      }))
+      .sort((a, b) => b.count - a.count)
+  }, [stats.platformCounts])
+
+  const topShiurim = useMemo(() => {
+    const counts: Record<string, { plays: number; downloads: number }> = {}
+    plays.forEach((p) => {
+      if (!p.shiurId) return
+      counts[p.shiurId] = counts[p.shiurId] || { plays: 0, downloads: 0 }
+      counts[p.shiurId].plays += 1
+    })
+    downloads.forEach((d) => {
+      if (!d.shiurId) return
+      counts[d.shiurId] = counts[d.shiurId] || { plays: 0, downloads: 0 }
+      counts[d.shiurId].downloads += 1
+    })
+    return Object.entries(counts)
+      .map(([shiurId, c]) => ({
+        shiurId,
+        title: shiurInfo[shiurId]?.title || shiurId,
+        rebbe: shiurInfo[shiurId]?.rebbe,
+        plays: c.plays,
+        downloads: c.downloads,
+        total: c.plays + c.downloads,
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10)
+  }, [plays, downloads, shiurInfo])
+
+  const topListeners = useMemo(() => {
+    const counts: Record<
+      string,
+      { name: string; email: string | null; plays: number; downloads: number }
+    > = {}
+    const add = (e: EngagementEvent, kind: "plays" | "downloads") => {
+      const key = e.userId || e.userEmail
+      if (!key) return // skip anonymous
+      if (!counts[key]) {
+        counts[key] = {
+          name: e.userName || e.userEmail || "User",
+          email: e.userEmail,
+          plays: 0,
+          downloads: 0,
+        }
+      }
+      counts[key][kind] += 1
+    }
+    plays.forEach((p) => add(p, "plays"))
+    downloads.forEach((d) => add(d, "downloads"))
+    return Object.values(counts)
+      .map((c) => ({ ...c, total: c.plays + c.downloads }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10)
+  }, [plays, downloads])
+
+  const recentActivity = useMemo(() => {
+    type Row = EngagementEvent & { kind: "play" | "download" }
+    const all: Row[] = [
+      ...plays.map((p) => ({ ...p, kind: "play" as const })),
+      ...downloads.map((d) => ({ ...d, kind: "download" as const })),
+    ]
+    return all
+      .filter((r) => r.timestamp)
+      .sort((a, b) => b.timestamp!.getTime() - a.timestamp!.getTime())
+      .slice(0, 25)
+  }, [plays, downloads])
+
+  const activityChartConfig: ChartConfig = {
+    plays: { label: "Plays", color: "#0c1a35" },
+    downloads: { label: "Downloads", color: "#c9a44e" },
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-navy">Site Analytics</h1>
-        <p className="text-navy/60">Track visitor activity and page views</p>
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="flex items-end justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="font-serif text-3xl font-bold text-navy mb-1">Usage Analytics</h1>
+          <p className="text-navy/70">
+            Plays, downloads, and listener activity across web and mobile
+          </p>
+        </div>
+        <Select value={range} onValueChange={(v) => setRange(v as Range)}>
+          <SelectTrigger className="w-[180px] border-gold/30 bg-white">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(RANGE_LABELS) as Range[]).map((r) => (
+              <SelectItem key={r} value={r}>
+                {RANGE_LABELS[r]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
-      {/* Overview Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card className="border-gold/20">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-navy/70">Total Page Views</CardTitle>
-            <Eye className="h-4 w-4 text-gold" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-navy">{totals?.totalPageViews || 0}</div>
-            <p className="text-xs text-navy/60">All time</p>
-          </CardContent>
-        </Card>
+      {loading ? (
+        <div className="flex items-center justify-center py-24">
+          <Loader2 className="h-8 w-8 animate-spin text-navy/50" />
+        </div>
+      ) : (
+        <>
+          {/* Stat cards */}
+          <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              icon={<Play className="h-5 w-5" />}
+              label="Total Plays"
+              value={stats.totalPlays}
+              accent="navy"
+            />
+            <StatCard
+              icon={<Download className="h-5 w-5" />}
+              label="Total Downloads"
+              value={stats.totalDownloads}
+              accent="gold"
+            />
+            <StatCard
+              icon={<Users className="h-5 w-5" />}
+              label="Unique Listeners"
+              value={stats.uniqueListeners}
+              accent="navy"
+            />
+            <StatCard
+              icon={<Smartphone className="h-5 w-5" />}
+              label="Top Platform"
+              value={stats.topPlatform ? platformLabel(stats.topPlatform) : "—"}
+              accent="gold"
+              isText
+            />
+          </div>
 
-        <Card className="border-gold/20">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-navy/70">Unique Visitors</CardTitle>
-            <Users className="h-4 w-4 text-gold" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-navy">{totals?.uniqueVisitors || 0}</div>
-            <p className="text-xs text-navy/60">All time (daily unique)</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-gold/20">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-navy/70">Today's Views</CardTitle>
-            <TrendingUp className="h-4 w-4 text-gold" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-navy">{dailyStats[0]?.views || 0}</div>
-            <p className="text-xs text-navy/60">{formatDate(new Date().toISOString().split("T")[0])}</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-gold/20">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-navy/70">Today's Users</CardTitle>
-            <UserCheck className="h-4 w-4 text-gold" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-navy">{dailyStats[0]?.visitors?.length || 0}</div>
-            <p className="text-xs text-navy/60">Logged in users</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Daily Activity - Views + Users Combined */}
-        <Card className="border-gold/20 lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="text-navy">Daily Activity</CardTitle>
-            <CardDescription>Page views and logged-in users per day</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-6">
-              {dailyStats.length === 0 ? (
-                <p className="text-navy/60 text-center py-4">No data yet</p>
+          {/* Activity chart */}
+          <Card className="border-gold/20 bg-white shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-navy flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-gold" />
+                Daily Activity
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {dailyData.every((d) => d.plays === 0 && d.downloads === 0) ? (
+                <EmptyState message="No activity in this range yet." />
               ) : (
-                dailyStats.map((day) => (
-                  <div key={day.date} className="border-b border-gold/10 pb-6 last:border-0 last:pb-0">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="font-semibold text-navy text-lg">{formatDate(day.date)}</span>
-                      <div className="flex items-center gap-4 text-sm">
-                        <span className="flex items-center gap-1 text-navy/70">
-                          <Eye className="h-4 w-4 text-gold" />
-                          {day.views} views
-                        </span>
-                        <span className="flex items-center gap-1 text-navy/70">
-                          <UserCheck className="h-4 w-4 text-gold" />
-                          {day.visitors?.length || 0} users
-                        </span>
-                      </div>
-                    </div>
+                <ChartContainer config={activityChartConfig} className="h-[280px] w-full">
+                  <BarChart data={dailyData} margin={{ left: 8, right: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                    <XAxis
+                      dataKey="day"
+                      tickFormatter={(v) => formatDayLabel(v)}
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={11}
+                      interval="preserveStartEnd"
+                      minTickGap={24}
+                    />
+                    <YAxis tickLine={false} axisLine={false} fontSize={11} allowDecimals={false} />
+                    <ChartTooltip
+                      content={
+                        <ChartTooltipContent
+                          labelFormatter={(label) => formatDayLabel(label as string)}
+                        />
+                      }
+                    />
+                    <Bar dataKey="plays" fill="var(--color-plays)" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="downloads" fill="var(--color-downloads)" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ChartContainer>
+              )}
+            </CardContent>
+          </Card>
 
-                    {/* Progress bar for views */}
-                    <div className="h-2 bg-cream rounded-full overflow-hidden mb-4">
-                      <div
-                        className="h-full bg-gold rounded-full transition-all"
-                        style={{
-                          width: `${Math.min(100, (day.views / Math.max(...dailyStats.map((d) => d.views), 1)) * 100)}%`,
-                        }}
-                      />
-                    </div>
-
-                    {/* Users who visited */}
-                    {day.visitors && day.visitors.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {day.visitors.map((visitor, idx) => (
+          {/* Platform breakdown + Top shiurim */}
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card className="border-gold/20 bg-white shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-navy flex items-center gap-2">
+                  <Smartphone className="h-5 w-5 text-gold" />
+                  Platform Breakdown
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {platformPieData.length === 0 ? (
+                  <EmptyState message="No platform data yet." />
+                ) : (
+                  <div className="grid gap-6 md:grid-cols-2 items-center">
+                    <ChartContainer config={{}} className="h-[220px] w-full">
+                      <PieChart>
+                        <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                        <Pie
+                          data={platformPieData}
+                          dataKey="count"
+                          nameKey="label"
+                          innerRadius={50}
+                          outerRadius={85}
+                          strokeWidth={2}
+                          stroke="#fff"
+                        >
+                          {platformPieData.map((entry) => (
+                            <Cell key={entry.platform} fill={entry.color} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ChartContainer>
+                    <div className="space-y-2">
+                      {platformPieData.map((p) => {
+                        const total = platformPieData.reduce((acc, x) => acc + x.count, 0)
+                        const pct = total ? Math.round((p.count / total) * 100) : 0
+                        return (
                           <div
-                            key={`${visitor.email}-${idx}`}
-                            className="flex items-center gap-2 bg-cream/50 rounded-full px-3 py-1.5"
+                            key={p.platform}
+                            className="flex items-center justify-between gap-3 text-sm"
                           >
-                            <div className="w-6 h-6 rounded-full bg-gold/20 flex items-center justify-center">
-                              <span className="text-xs font-medium text-navy">
-                                {visitor.name?.charAt(0).toUpperCase() || "?"}
-                              </span>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className="h-3 w-3 rounded-sm flex-shrink-0"
+                                style={{ backgroundColor: p.color }}
+                              />
+                              <span className="text-navy truncate">{p.label}</span>
                             </div>
-                            <div className="text-sm">
-                              <span className="font-medium text-navy">{visitor.name}</span>
-                              <span className="text-navy/50 ml-1 text-xs">({formatTime(visitor.lastSeen)})</span>
+                            <div className="flex items-baseline gap-2 flex-shrink-0">
+                              <span className="font-medium text-navy">{p.count}</span>
+                              <span className="text-xs text-navy/50">{pct}%</span>
                             </div>
                           </div>
-                        ))}
-                      </div>
-                    )}
+                        )
+                      })}
+                    </div>
                   </div>
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                )}
+              </CardContent>
+            </Card>
 
-        {/* Top Pages */}
-        <Card className="border-gold/20">
-          <CardHeader>
-            <CardTitle className="text-navy flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-gold" />
-              Top Pages
-            </CardTitle>
-            <CardDescription>Most viewed pages (all time)</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {topPages.length === 0 ? (
-                <p className="text-navy/60 text-center py-4">No data yet</p>
-              ) : (
-                topPages.map((page, index) => (
-                  <div key={page.path} className="flex items-center gap-4">
-                    <div className="flex items-center justify-center w-8 h-8 rounded-full bg-gold/10 text-gold font-bold">
-                      {index + 1}
-                    </div>
-                    <div className="flex-1">
-                      <div className="font-medium text-navy">{getPageName(page.path)}</div>
-                      <div className="text-sm text-navy/60">{page.path}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-bold text-navy">{page.views}</div>
-                      <div className="text-xs text-navy/60">views</div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
+            <Card className="border-gold/20 bg-white shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-navy flex items-center gap-2">
+                  <BarChart3 className="h-5 w-5 text-gold" />
+                  Top Shiurim
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {topShiurim.length === 0 ? (
+                  <EmptyState message="No shiur engagement yet." />
+                ) : (
+                  <ol className="space-y-3">
+                    {topShiurim.map((s, i) => (
+                      <li
+                        key={s.shiurId}
+                        className="flex items-start gap-3 pb-3 border-b border-navy/5 last:border-0 last:pb-0"
+                      >
+                        <span className="flex-shrink-0 h-7 w-7 rounded-full bg-navy/5 text-navy text-xs font-semibold flex items-center justify-center">
+                          {i + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-navy truncate">{s.title}</p>
+                          {s.rebbe && (
+                            <p className="text-xs text-navy/50 truncate">{s.rebbe}</p>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end text-xs text-navy/60 flex-shrink-0">
+                          <span className="flex items-center gap-1">
+                            <Play className="h-3 w-3" /> {s.plays}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Download className="h-3 w-3" /> {s.downloads}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </CardContent>
+            </Card>
+          </div>
 
-        {/* Page Breakdown for Today */}
-        <Card className="border-gold/20">
-          <CardHeader>
-            <CardTitle className="text-navy flex items-center gap-2">
-              <Eye className="h-5 w-5 text-gold" />
-              Today's Pages
-            </CardTitle>
-            <CardDescription>Page views breakdown for today</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {dailyStats[0]?.pages && dailyStats[0].pages.length > 0 ? (
-                dailyStats[0].pages.map((page) => (
-                  <div key={page.path} className="flex items-center justify-between">
-                    <span className="text-navy">{getPageName(page.path)}</span>
-                    <span className="font-medium text-navy">{page.views}</span>
+          {/* Top listeners + Recent activity */}
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card className="border-gold/20 bg-white shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-navy flex items-center gap-2">
+                  <UserIcon className="h-5 w-5 text-gold" />
+                  Most Active Listeners
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {topListeners.length === 0 ? (
+                  <EmptyState message="No listener activity yet." />
+                ) : (
+                  <ol className="space-y-3">
+                    {topListeners.map((l, i) => (
+                      <li
+                        key={(l.email || l.name) + i}
+                        className="flex items-start gap-3 pb-3 border-b border-navy/5 last:border-0 last:pb-0"
+                      >
+                        <span className="flex-shrink-0 h-7 w-7 rounded-full bg-navy/5 text-navy text-xs font-semibold flex items-center justify-center">
+                          {i + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-navy truncate">{l.name}</p>
+                          {l.email && l.email !== l.name && (
+                            <p className="text-xs text-navy/50 truncate">{l.email}</p>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end text-xs text-navy/60 flex-shrink-0">
+                          <span className="flex items-center gap-1">
+                            <Play className="h-3 w-3" /> {l.plays}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Download className="h-3 w-3" /> {l.downloads}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-gold/20 bg-white shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-navy flex items-center gap-2">
+                  <TrendingUp className="h-5 w-5 text-gold" />
+                  Recent Activity
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {recentActivity.length === 0 ? (
+                  <EmptyState message="No recent activity." />
+                ) : (
+                  <ul className="space-y-3 max-h-[420px] overflow-y-auto pr-2">
+                    {recentActivity.map((row) => (
+                      <li
+                        key={row.kind + row.id}
+                        className="flex items-start gap-3 pb-3 border-b border-navy/5 last:border-0 last:pb-0"
+                      >
+                        <div
+                          className={`flex-shrink-0 h-7 w-7 rounded-full flex items-center justify-center ${
+                            row.kind === "play"
+                              ? "bg-navy/10 text-navy"
+                              : "bg-gold/15 text-gold"
+                          }`}
+                        >
+                          {row.kind === "play" ? (
+                            <Play className="h-3.5 w-3.5" />
+                          ) : (
+                            <Download className="h-3.5 w-3.5" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium text-navy truncate">
+                              {userLabel(row)}
+                            </p>
+                            {row.platform && <PlatformBadge platform={row.platform} />}
+                          </div>
+                          <p className="text-xs text-navy/50 truncate">
+                            {row.kind === "play" ? "Played" : "Downloaded"}{" "}
+                            <span className="text-navy/70">
+                              {shiurInfo[row.shiurId]?.title || row.shiurId || "shiur"}
+                            </span>
+                          </p>
+                          <p className="text-[11px] text-navy/40 mt-0.5">
+                            {formatTime(row.timestamp)}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Site-wide page views (legacy) */}
+          {pageViewTotals && (pageViewTotals.totalPageViews > 0 || pageViewTotals.uniqueVisitors > 0) && (
+            <Card className="border-gold/20 bg-white shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-navy flex items-center gap-2">
+                  <Eye className="h-5 w-5 text-gold" />
+                  Site-Wide Page Views
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 grid-cols-2">
+                  <div className="bg-navy/5 rounded-lg p-4">
+                    <p className="text-xs font-medium text-navy/60 uppercase tracking-wide mb-1">
+                      Total Page Views
+                    </p>
+                    <p className="text-2xl font-serif font-bold text-navy">
+                      {pageViewTotals.totalPageViews.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-navy/50 mt-1">All time</p>
                   </div>
-                ))
-              ) : (
-                <p className="text-navy/60 text-center py-4">No page views today</p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+                  <div className="bg-gold/5 rounded-lg p-4">
+                    <p className="text-xs font-medium text-navy/60 uppercase tracking-wide mb-1">
+                      Unique Visitors
+                    </p>
+                    <p className="text-2xl font-serif font-bold text-navy">
+                      {pageViewTotals.uniqueVisitors.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-navy/50 mt-1">All time (daily unique)</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function StatCard({
+  icon,
+  label,
+  value,
+  accent,
+  isText,
+}: {
+  icon: React.ReactNode
+  label: string
+  value: number | string
+  accent: "navy" | "gold"
+  isText?: boolean
+}) {
+  return (
+    <Card className="border-gold/20 bg-white shadow-sm">
+      <CardContent className="p-5">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs font-medium text-navy/60 uppercase tracking-wide">
+            {label}
+          </span>
+          <span
+            className={`h-8 w-8 rounded-lg flex items-center justify-center ${
+              accent === "navy" ? "bg-navy/10 text-navy" : "bg-gold/15 text-gold"
+            }`}
+          >
+            {icon}
+          </span>
+        </div>
+        <p
+          className={`font-serif font-bold text-navy ${isText ? "text-xl" : "text-3xl"}`}
+        >
+          {typeof value === "number" ? value.toLocaleString() : value}
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+function PlatformBadge({ platform }: { platform: string }) {
+  const isAndroid = platform === "android"
+  const isApple = platform === "ios" || platform === "ipados"
+  return (
+    <span
+      className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium ${
+        isAndroid
+          ? "bg-green-100 text-green-700"
+          : isApple
+            ? "bg-blue-100 text-blue-700"
+            : "bg-muted text-muted-foreground"
+      }`}
+    >
+      {platformLabel(platform)}
+    </span>
+  )
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="py-12 text-center">
+      <p className="text-sm text-navy/50">{message}</p>
     </div>
   )
 }
