@@ -29,6 +29,7 @@ interface NotificationRecord {
   body: string
   type: string
   topics: string[]
+  platform: string
   sentAt: string
   status: string
 }
@@ -43,6 +44,7 @@ export default function NotificationsPage() {
   const [notificationType, setNotificationType] = useState<string>("announcement")
   const [selectedRebbe, setSelectedRebbe] = useState<string>("")
   const [customTopic, setCustomTopic] = useState<string>("")
+  const [platform, setPlatform] = useState<"all" | "android" | "ios" | "web">("all")
   const [title, setTitle] = useState("")
   const [body, setBody] = useState("")
 
@@ -82,6 +84,7 @@ export default function NotificationsPage() {
           body: data.body || "",
           type: data.type || "",
           topics: data.topics || [data.topic] || [],
+          platform: data.platform || "all",
           sentAt: data.sentAt || "",
           status: data.status || "unknown",
         })
@@ -167,6 +170,7 @@ export default function NotificationsPage() {
           body: body.trim(),
           topics,
           type: notificationType,
+          platform,
         }),
       })
 
@@ -176,9 +180,11 @@ export default function NotificationsPage() {
         throw new Error(data.error || "Failed to send notification")
       }
 
+      const audienceLabel =
+        platform === "all" ? "all platforms" : `${platform} users only`
       toast({
         title: "Notification Sent",
-        description: `Sent to ${topics.join(", ")}`,
+        description: `Sent to ${topics.join(", ")} (${audienceLabel})`,
       })
 
       // Reset form
@@ -186,6 +192,7 @@ export default function NotificationsPage() {
       setBody("")
       setSelectedRebbe("")
       setCustomTopic("")
+      setPlatform("all")
 
       // Refresh history
       fetchHistory()
@@ -206,7 +213,9 @@ export default function NotificationsPage() {
     <div className="space-y-8">
       <div>
         <h1 className="font-serif text-3xl font-bold text-navy mb-1">Push Notifications</h1>
-        <p className="text-navy/70">Send iOS push notifications to subscribed users</p>
+        <p className="text-navy/70">
+          Send push notifications to subscribed users on Android, iOS, and web
+        </p>
       </div>
 
       {/* Notification Composer */}
@@ -237,6 +246,30 @@ export default function NotificationsPage() {
                   <SelectItem value="custom">Custom</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Audience / Platform filter */}
+            <div className="space-y-2">
+              <Label>Audience</Label>
+              <Select
+                value={platform}
+                onValueChange={(v) => setPlatform(v as typeof platform)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Platforms (default)</SelectItem>
+                  <SelectItem value="android">Android Only</SelectItem>
+                  <SelectItem value="ios">iOS Only</SelectItem>
+                  <SelectItem value="web">Web Only</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-navy/50">
+                {platform === "all"
+                  ? "Delivers to every device subscribed to the topic, regardless of platform."
+                  : `Only devices on ${platform} that are subscribed to the topic will receive this.`}
+              </p>
             </div>
 
             {/* Rebbe selector for New Shiur */}
@@ -341,11 +374,29 @@ export default function NotificationsPage() {
 
             {/* Topic info */}
             {topics.length > 0 && (
-              <div className="bg-navy/5 rounded-lg px-4 py-3">
+              <div className="bg-navy/5 rounded-lg px-4 py-3 space-y-1">
                 <p className="text-sm text-navy/70">
-                  Sending to: {topics.map((t) => (
-                    <span key={t} className="inline-block font-mono text-xs bg-navy/10 rounded px-1.5 py-0.5 mx-0.5">{t}</span>
+                  Sending to:{" "}
+                  {topics.map((t) => (
+                    <span
+                      key={t}
+                      className="inline-block font-mono text-xs bg-navy/10 rounded px-1.5 py-0.5 mx-0.5"
+                    >
+                      {t}
+                    </span>
                   ))}
+                </p>
+                <p className="text-sm text-navy/70">
+                  Audience:{" "}
+                  <span
+                    className={`inline-block font-mono text-xs rounded px-1.5 py-0.5 ${
+                      platform === "all"
+                        ? "bg-navy/10 text-navy"
+                        : "bg-gold/20 text-navy font-semibold"
+                    }`}
+                  >
+                    {platform === "all" ? "all platforms" : `platform_${platform}`}
+                  </span>
                 </p>
               </div>
             )}
@@ -396,6 +447,7 @@ export default function NotificationsPage() {
                   <tr className="border-b border-gold/20">
                     <th className="text-left py-3 px-3 text-navy/70 font-medium">Date</th>
                     <th className="text-left py-3 px-3 text-navy/70 font-medium">Type</th>
+                    <th className="text-left py-3 px-3 text-navy/70 font-medium">Audience</th>
                     <th className="text-left py-3 px-3 text-navy/70 font-medium">Topic(s)</th>
                     <th className="text-left py-3 px-3 text-navy/70 font-medium">Title</th>
                     <th className="text-left py-3 px-3 text-navy/70 font-medium">Message</th>
@@ -414,6 +466,20 @@ export default function NotificationsPage() {
                       <td className="py-3 px-3">
                         <span className="inline-block text-xs px-2 py-0.5 rounded bg-navy/10 text-navy font-medium">
                           {getTypeLabel(record.type)}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3">
+                        <span
+                          className={`inline-block text-xs px-2 py-0.5 rounded font-medium ${
+                            record.platform === "all" || !record.platform
+                              ? "bg-navy/5 text-navy/60"
+                              : "bg-gold/15 text-navy"
+                          }`}
+                        >
+                          {record.platform === "all" || !record.platform
+                            ? "All"
+                            : record.platform.charAt(0).toUpperCase() +
+                              record.platform.slice(1)}
                         </span>
                       </td>
                       <td className="py-3 px-3">

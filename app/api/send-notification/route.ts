@@ -27,7 +27,18 @@ function getFirebaseAdmin() {
 
 export async function POST(request: Request) {
   try {
-    const { title, body, topics, type = "general", data: extraData } = await request.json()
+    const {
+      title,
+      body,
+      topics,
+      type = "general",
+      platform = "all",
+      data: extraData,
+    } = await request.json()
+
+    // Validate platform value (defensive - frontend already restricts these)
+    const validPlatforms = ["all", "android", "ios", "web"]
+    const audience: string = validPlatforms.includes(platform) ? platform : "all"
 
     // Validate required fields
     if (!title || !body) {
@@ -58,10 +69,17 @@ export async function POST(request: Request) {
     const messageIds: string[] = []
     const errors: string[] = []
 
-    // Send to each topic
+    // The Android / iOS / web clients each subscribe to a "platform_<name>"
+    // topic on first launch. To target a single platform we combine the
+    // content topic with the platform topic via FCM's `condition` syntax,
+    // which only delivers to devices subscribed to BOTH topics.
+    const platformTopic =
+      audience === "all" ? null : `platform_${audience}`
+
+    // Send to each topic (or condition, when platform is filtered)
     for (const topic of topics) {
       try {
-        const message = {
+        const baseMessage = {
           notification: {
             title,
             body,
@@ -69,10 +87,10 @@ export async function POST(request: Request) {
           data: {
             type,
             topic,
+            platform: audience,
             timestamp: new Date().toISOString(),
             ...(extraData || {}),
           },
-          topic,
           apns: {
             payload: {
               aps: {
@@ -86,6 +104,16 @@ export async function POST(request: Request) {
             },
           },
         }
+
+        const message = platformTopic
+          ? {
+              ...baseMessage,
+              condition: `'${topic}' in topics && '${platformTopic}' in topics`,
+            }
+          : {
+              ...baseMessage,
+              topic,
+            }
 
         const response = await messaging.send(message)
         messageIds.push(response)
@@ -102,6 +130,7 @@ export async function POST(request: Request) {
         body,
         topics,
         type,
+        platform: audience,
         sentAt: new Date().toISOString(),
         messageIds,
         errors: errors.length > 0 ? errors : null,
