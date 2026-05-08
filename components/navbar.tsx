@@ -4,7 +4,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { useAuth } from "@/lib/auth-context"
 import { Button } from "@/components/ui/button"
-import { Menu, User, Mail } from "lucide-react"
+import { Menu, User, Mail, Bell } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { useState } from "react"
 import { usePathname } from "next/navigation"
@@ -102,6 +102,12 @@ export function Navbar() {
                       My Info
                     </Link>
                   </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/subscriptions" className="cursor-pointer text-navy hover:bg-gold/10">
+                      <Bell className="h-4 w-4 mr-2" />
+                      Subscriptions
+                    </Link>
+                  </DropdownMenuItem>
                   {isAdmin && (
                     <DropdownMenuItem asChild>
                       <Link href="/admin" className="cursor-pointer text-navy hover:bg-gold/10">
@@ -161,6 +167,18 @@ export function Navbar() {
                     }`}
                   >
                     My Info
+                  </Link>
+                  <Link
+                    href="/subscriptions"
+                    onClick={() => setOpen(false)}
+                    className={`px-3 py-3 transition-colors text-base border-l-2 flex items-center gap-2 ${
+                      pathname === "/subscriptions"
+                        ? "text-gold bg-cream/10 border-gold"
+                        : "text-cream hover:text-gold hover:bg-cream/5 border-transparent hover:border-gold"
+                    }`}
+                  >
+                    <Bell className="h-4 w-4" />
+                    Subscriptions
                   </Link>
                   {isAdmin && (
                     <>

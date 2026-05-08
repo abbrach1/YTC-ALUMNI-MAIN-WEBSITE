@@ -73,6 +73,7 @@ interface VisitorRecord {
   email: string | null
   name: string
   lastSeen: Date | null
+  visits: number
 }
 
 interface DailyAggregate {
@@ -96,11 +97,19 @@ const RANGE_LABELS: Record<Range, string> = {
 }
 
 const PLATFORM_COLORS: Record<string, string> = {
+  // Explicit native vs browser
+  "ios-app": "#3b82f6",
+  "ios-web": "#93c5fd",
+  "ipados-app": "#60a5fa",
+  "ipados-web": "#bfdbfe",
+  "android-app": "#22c55e",
+  "android-web": "#86efac",
+  "web-desktop": "#0c1a35",
+  "web-mobile": "#6b7280",
+  // Legacy bare values
   android: "#22c55e",
   ios: "#3b82f6",
   ipados: "#60a5fa",
-  "web-desktop": "#0c1a35",
-  "web-mobile": "#6b7280",
   unknown: "#9ca3af",
 }
 
@@ -241,23 +250,47 @@ export default function AnalyticsPage() {
           snap.docs.forEach((d) => {
             const data = d.data() as Record<string, unknown>
             if (d.id === "_visitors") {
-              const users =
-                (data.users as Array<{ email?: string; name?: string; lastSeen?: string }>) || []
-              // De-dupe by email so multiple writes per user only show once
+              type VisitorEntry = {
+                email?: string
+                name?: string
+                lastSeen?: string
+                visits?: number
+              }
+              // Newer schema: users is a map keyed by uid with an authoritative
+              // `visits` count per user per day. Legacy schema: users is an array
+              // with one element per pageview (no `visits` field) — fall back to
+              // counting array occurrences. Handle both for backward compat.
+              const rawUsers = data.users
+              const isMap =
+                rawUsers && typeof rawUsers === "object" && !Array.isArray(rawUsers)
+              const userList: VisitorEntry[] = Array.isArray(rawUsers)
+                ? (rawUsers as VisitorEntry[])
+                : isMap
+                  ? (Object.values(rawUsers) as VisitorEntry[])
+                  : []
               const seen: Record<string, VisitorRecord> = {}
-              users.forEach((u) => {
+              userList.forEach((u) => {
                 const email = u.email || "anon"
                 const ts = u.lastSeen ? new Date(u.lastSeen) : null
                 const existing = seen[email]
-                if (
-                  !existing ||
-                  (ts && existing.lastSeen && ts > existing.lastSeen) ||
-                  (ts && !existing.lastSeen)
-                ) {
+                // For map shape, trust the stored `visits` count.
+                // For array shape (legacy), every element is one pageview, so add 1.
+                const visitDelta = isMap ? Math.max(1, u.visits || 1) : 1
+                if (!existing) {
                   seen[email] = {
                     email: u.email || null,
                     name: u.name || u.email || "Anonymous",
                     lastSeen: ts && !isNaN(ts.getTime()) ? ts : null,
+                    visits: visitDelta,
+                  }
+                } else {
+                  if (isMap) {
+                    existing.visits = visitDelta
+                  } else {
+                    existing.visits += 1
+                  }
+                  if (ts && (!existing.lastSeen || ts > existing.lastSeen)) {
+                    existing.lastSeen = ts
                   }
                 }
               })
@@ -466,6 +499,7 @@ export default function AnalyticsPage() {
       email: string | null
       lastSeen: Date | null
       platforms: Set<string>
+      visits: number
     }
     type Day = {
       dayKey: string
@@ -478,6 +512,7 @@ export default function AnalyticsPage() {
         email: string | null
         lastSeen: Date | null
         platforms: string[]
+        visits: number
       }[]
     }
 
@@ -497,20 +532,28 @@ export default function AnalyticsPage() {
     const upsertVisitor = (
       date: string,
       key: string,
-      info: { name: string; email: string | null; lastSeen: Date | null; platform: string | null },
+      info: {
+        name: string
+        email: string | null
+        lastSeen: Date | null
+        platform: string | null
+        visits?: number
+      },
     ) => {
       const bucket = ensureDay(date)
       const existing = bucket.visitorMap[key]
+      const visitsDelta = info.visits ?? 1
       if (!existing) {
         bucket.visitorMap[key] = {
           name: info.name,
           email: info.email,
           lastSeen: info.lastSeen,
           platforms: new Set(info.platform ? [info.platform] : []),
+          visits: visitsDelta,
         }
         return
       }
-      // Newer lastSeen wins for name/email; platforms accumulate
+      // Newer lastSeen wins for name/email; platforms accumulate; visits sum
       if (
         info.lastSeen &&
         (!existing.lastSeen || info.lastSeen > existing.lastSeen)
@@ -520,6 +563,7 @@ export default function AnalyticsPage() {
         existing.lastSeen = info.lastSeen
       }
       if (info.platform) existing.platforms.add(info.platform)
+      existing.visits += visitsDelta
     }
 
     // Seed each day in range so days with zero data still render
@@ -538,6 +582,7 @@ export default function AnalyticsPage() {
           email: v.email,
           lastSeen: v.lastSeen,
           platform: null,
+          visits: v.visits,
         })
       })
     })
@@ -575,6 +620,9 @@ export default function AnalyticsPage() {
           email: e.userEmail,
           lastSeen: e.timestamp,
           platform: e.platform,
+          // plays/downloads are engagement events, not pageviews —
+          // don't inflate the visit count
+          visits: 0,
         })
       })
     }
@@ -598,6 +646,7 @@ export default function AnalyticsPage() {
               email: v.email,
               lastSeen: v.lastSeen,
               platforms: Array.from(v.platforms).sort(),
+              visits: v.visits,
             }))
             .sort((a, b) => {
               const at = a.lastSeen?.getTime() ?? 0
@@ -957,7 +1006,7 @@ export default function AnalyticsPage() {
             </div>
 
             {/* Site stat cards */}
-            <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 grid-cols-1 md:grid-cols-3">
               <StatCard
                 icon={<Eye className="h-5 w-5" />}
                 label="Page Views"
@@ -975,12 +1024,6 @@ export default function AnalyticsPage() {
                 label="All-Time Views"
                 value={pageViewTotals?.totalPageViews ?? 0}
                 accent="navy"
-              />
-              <StatCard
-                icon={<Users className="h-5 w-5" />}
-                label="All-Time Visitors"
-                value={pageViewTotals?.uniqueVisitors ?? 0}
-                accent="gold"
               />
             </div>
 
@@ -1039,6 +1082,14 @@ export default function AnalyticsPage() {
                                     <p className="text-sm font-medium text-navy truncate">
                                       {v.name}
                                     </p>
+                                    {v.visits > 1 && (
+                                      <span
+                                        className="flex-shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gold/15 text-navy border border-gold/30"
+                                        title={`${v.visits} pageviews this day`}
+                                      >
+                                        ×{v.visits}
+                                      </span>
+                                    )}
                                     {v.platforms.map((p) => (
                                       <PlatformBadge key={p} platform={p} />
                                     ))}

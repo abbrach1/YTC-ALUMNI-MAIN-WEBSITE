@@ -35,7 +35,7 @@ const frankRuhlLibre = Frank_Ruhl_Libre({
 })
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://ytcalumni.com"),
+  metadataBase: new URL("https://alumni.ytchaim.com"),
   title: {
     default: "Yeshiva Toras Chaim Alumni Network | Connecting Talmidim & Rebbeim",
     template: "%s | Yeshiva Toras Chaim Alumni",
@@ -67,7 +67,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_US",
-    url: "https://ytcalumni.com",
+    url: "https://alumni.ytchaim.com",
     siteName: "Yeshiva Toras Chaim Alumni",
     title: "Yeshiva Toras Chaim Alumni Network",
     description:
@@ -116,7 +116,7 @@ export const metadata: Metadata = {
   },
   manifest: "/manifest.json",
   alternates: {
-    canonical: "https://ytcalumni.com",
+    canonical: "https://alumni.ytchaim.com",
   },
   generator: "v0.app",
 }
@@ -150,9 +150,9 @@ export default function RootLayout({
               alternateName: "YTC",
               description:
                 "Yeshiva Toras Chaim Alumni Network - Connecting Talmidim, Rebbeim, and Friends of the Yeshiva. Access Torah shiurim, community events, and alumni resources.",
-              url: "https://ytcalumni.com",
-              logo: "https://ytcalumni.com/yeshiva-logo.png",
-              image: "https://ytcalumni.com/og-image.jpg",
+              url: "https://alumni.ytchaim.com",
+              logo: "https://alumni.ytchaim.com/yeshiva-logo.png",
+              image: "https://alumni.ytchaim.com/og-image.jpg",
               address: {
                 "@type": "PostalAddress",
                 addressLocality: "Denver",
@@ -175,12 +175,12 @@ export default function RootLayout({
               "@context": "https://schema.org",
               "@type": "WebSite",
               name: "Yeshiva Toras Chaim Alumni",
-              url: "https://ytcalumni.com",
+              url: "https://alumni.ytchaim.com",
               potentialAction: {
                 "@type": "SearchAction",
                 target: {
                   "@type": "EntryPoint",
-                  urlTemplate: "https://ytcalumni.com/shiurim?search={search_term_string}",
+                  urlTemplate: "https://alumni.ytchaim.com/shiurim?search={search_term_string}",
                 },
                 "query-input": "required name=search_term_string",
               },
@@ -194,11 +194,11 @@ export default function RootLayout({
               "@context": "https://schema.org",
               "@type": "BreadcrumbList",
               itemListElement: [
-                { "@type": "ListItem", position: 1, name: "Home", item: "https://ytcalumni.com" },
-                { "@type": "ListItem", position: 2, name: "Shiurim", item: "https://ytcalumni.com/shiurim" },
-                { "@type": "ListItem", position: 3, name: "Events", item: "https://ytcalumni.com/events" },
-                { "@type": "ListItem", position: 4, name: "Contacts", item: "https://ytcalumni.com/contacts" },
-                { "@type": "ListItem", position: 5, name: "Support", item: "https://ytcalumni.com/support" },
+                { "@type": "ListItem", position: 1, name: "Home", item: "https://alumni.ytchaim.com" },
+                { "@type": "ListItem", position: 2, name: "Shiurim", item: "https://alumni.ytchaim.com/shiurim" },
+                { "@type": "ListItem", position: 3, name: "Events", item: "https://alumni.ytchaim.com/events" },
+                { "@type": "ListItem", position: 4, name: "Contacts", item: "https://alumni.ytchaim.com/contacts" },
+                { "@type": "ListItem", position: 5, name: "Support", item: "https://alumni.ytchaim.com/support" },
               ],
             }),
           }}

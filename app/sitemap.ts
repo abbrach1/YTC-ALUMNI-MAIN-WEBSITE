@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next"
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = "https://ytcalumni.com"
+  const baseUrl = "https://alumni.ytchaim.com"
   const currentDate = new Date().toISOString()
 
   return [

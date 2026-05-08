@@ -13,7 +13,7 @@ export const metadata: Metadata = {
     images: [{ url: "/og-image.jpg", width: 1200, height: 630, alt: "Support Yeshiva Toras Chaim" }],
   },
   alternates: {
-    canonical: "https://ytcalumni.com/support",
+    canonical: "https://alumni.ytchaim.com/support",
   },
 }
 

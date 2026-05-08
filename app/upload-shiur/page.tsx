@@ -297,11 +297,6 @@ export default function UploadShiurPage() {
       return
     }
 
-    if (!audioFile && !audioBgUrl) {
-      toast({ title: "Please select an audio file", variant: "destructive" })
-      return
-    }
-
     if (audioBgStatus === "error") {
       toast({
         title: "Audio upload failed",
@@ -389,7 +384,23 @@ export default function UploadShiurPage() {
         uploadedAt: new Date().toISOString(),
       }
 
-      await addDoc(collection(db, "shiurim"), shiurData)
+      const newShiurRef = await addDoc(collection(db, "shiurim"), shiurData)
+
+      // Fire-and-forget: notify subscribers. Failures here must not break upload.
+      fetch("/api/notify-new-shiur", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shiurId: newShiurRef.id,
+          title: shiurData.title,
+          rebbe: shiurData.rebbe,
+          date: shiurData.date,
+          tags: shiurData.tags,
+          description: shiurData.description,
+          audioUrl: shiurData.audioUrl,
+          pdfUrl: shiurData.pdfUrl,
+        }),
+      }).catch((err) => console.error("Notify subscribers failed:", err))
 
       setUploadStatus("complete")
       setUploadProgress(100)
@@ -492,7 +503,7 @@ export default function UploadShiurPage() {
 
         updateBulkEntry(entry.id, { status: "saving", progress: 90 })
 
-        await addDoc(collection(db, "shiurim"), {
+        const newShiurRef = await addDoc(collection(db, "shiurim"), {
           title: entry.title,
           rebbe: entry.rebbe,
           date: entry.date,
@@ -505,6 +516,22 @@ export default function UploadShiurPage() {
           uploaderName: entry.uploaderName.trim(),
           uploadedAt: new Date().toISOString(),
         })
+
+        // Fire-and-forget: notify subscribers. Failures here must not break upload.
+        fetch("/api/notify-new-shiur", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shiurId: newShiurRef.id,
+            title: entry.title,
+            rebbe: entry.rebbe,
+            date: entry.date,
+            tags: entry.tags,
+            description: entry.description,
+            audioUrl,
+            pdfUrl,
+          }),
+        }).catch((err) => console.error("Notify subscribers failed:", err))
 
         updateBulkEntry(entry.id, { status: "complete", progress: 100 })
       } catch (error: any) {
@@ -580,7 +607,7 @@ export default function UploadShiurPage() {
 
                   {/* Audio File */}
                   <div className="space-y-2">
-                    <Label className="text-navy font-semibold">Audio File *</Label>
+                    <Label className="text-navy font-semibold">Audio File</Label>
                     <FileDropzone
                       accept="audio/*"
                       label="Drop audio file here, or click to browse"
@@ -1170,7 +1197,7 @@ export default function UploadShiurPage() {
 
                         <div className="grid gap-4 md:grid-cols-2">
                           <div className="space-y-2">
-                            <Label className="text-navy font-semibold text-sm">Audio File *</Label>
+                            <Label className="text-navy font-semibold text-sm">Audio File</Label>
                             <FileDropzone
                               accept="audio/*"
                               label="Drop audio or click"

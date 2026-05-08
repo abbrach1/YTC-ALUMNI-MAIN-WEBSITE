@@ -19,7 +19,7 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ["/admin", "/admin/*", "/api/*", "/admin-setup", "/request-access", "/access-denied", "/login"],
       },
     ],
-    sitemap: "https://ytcalumni.com/sitemap.xml",
-    host: "https://ytcalumni.com",
+    sitemap: "https://alumni.ytchaim.com/sitemap.xml",
+    host: "https://alumni.ytchaim.com",
   }
 }

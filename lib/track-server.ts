@@ -5,11 +5,19 @@ import { NextResponse } from "next/server"
  * Anything outside this set is coerced to "unknown" before being persisted.
  */
 const ALLOWED_PLATFORMS = new Set([
+  // Explicit native vs browser variants
+  "ios-app",
+  "ios-web",
+  "ipados-app",
+  "ipados-web",
+  "android-app",
+  "android-web",
+  "web-mobile",
+  "web-desktop",
+  // Legacy bare values, kept so older clients aren't suddenly coerced to "unknown"
   "android",
   "ios",
   "ipados",
-  "web-mobile",
-  "web-desktop",
   "unknown",
 ])
 
