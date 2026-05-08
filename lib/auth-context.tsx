@@ -12,6 +12,7 @@ import {
 } from "firebase/auth"
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from "firebase/firestore"
 import { auth, db } from "./firebase"
+import { SUPER_ADMIN_EMAIL } from "./admin-pages"
 
 interface UserProfile {
   firstName: string
@@ -24,6 +25,13 @@ interface AuthContextType {
   loading: boolean
   isApproved: boolean
   isAdmin: boolean
+  isSuperAdmin: boolean
+  /**
+   * The list of admin page hrefs this admin may access. `null` means no
+   * restriction (full access — used for the super-admin and for legacy
+   * admins whose Firestore doc has no `pages` field).
+   */
+  allowedAdminPages: string[] | null
   checkingApproval: boolean
   signInWithGoogle: () => Promise<{ isApproved: boolean; isAdmin: boolean }>
   signInWithEmail: (email: string, password: string) => Promise<{ isApproved: boolean; isAdmin: boolean }>
@@ -33,7 +41,13 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-async function checkUserApproval(email: string): Promise<{ approved: boolean; admin: boolean; approvalSource?: string }> {
+async function checkUserApproval(email: string): Promise<{
+  approved: boolean
+  admin: boolean
+  superAdmin: boolean
+  allowedAdminPages: string[] | null
+  approvalSource?: string
+}> {
   const normalizedEmail = email.toLowerCase()
 
   let approved = false
@@ -64,22 +78,37 @@ async function checkUserApproval(email: string): Promise<{ approved: boolean; ad
     }
   }
 
-  // Check admin status
+  // Check admin status. We try the email-keyed doc first because that's
+  // what /admin/permissions writes; fall back to the legacy email-field
+  // query so admins added via older flows still resolve.
   let admin = false
+  let allowedAdminPages: string[] | null = null
   const adminRef = doc(db, "admins", normalizedEmail)
   const adminSnap = await getDoc(adminRef)
 
   if (adminSnap.exists()) {
     admin = true
+    const data = adminSnap.data()
+    if (Array.isArray(data?.pages)) {
+      allowedAdminPages = data.pages.filter((p: unknown): p is string => typeof p === "string")
+    }
   } else {
     const adminQuery = query(collection(db, "admins"), where("email", "==", normalizedEmail))
     const adminQuerySnap = await getDocs(adminQuery)
     if (!adminQuerySnap.empty) {
       admin = true
+      const data = adminQuerySnap.docs[0].data()
+      if (Array.isArray(data?.pages)) {
+        allowedAdminPages = data.pages.filter((p: unknown): p is string => typeof p === "string")
+      }
     }
   }
 
-  return { approved, admin, approvalSource }
+  // Super-admin always has full access regardless of any pages field.
+  const superAdmin = admin && normalizedEmail === SUPER_ADMIN_EMAIL.toLowerCase()
+  if (superAdmin) allowedAdminPages = null
+
+  return { approved, admin, superAdmin, allowedAdminPages, approvalSource }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -87,6 +116,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [isApproved, setIsApproved] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  const [allowedAdminPages, setAllowedAdminPages] = useState<string[] | null>(null)
   const [checkingApproval, setCheckingApproval] = useState(false)
 
   useEffect(() => {
@@ -95,12 +126,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setCheckingApproval(true)
 
       if (user && user.email) {
-        const { approved, admin } = await checkUserApproval(user.email)
+        const { approved, admin, superAdmin, allowedAdminPages } = await checkUserApproval(user.email)
         setIsApproved(approved)
         setIsAdmin(admin)
+        setIsSuperAdmin(superAdmin)
+        setAllowedAdminPages(allowedAdminPages)
       } else {
         setIsApproved(false)
         setIsAdmin(false)
+        setIsSuperAdmin(false)
+        setAllowedAdminPages(null)
       }
 
       setCheckingApproval(false)
@@ -114,9 +149,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const provider = new GoogleAuthProvider()
     const result = await signInWithPopup(auth, provider)
     if (result.user.email) {
-      const { approved, admin } = await checkUserApproval(result.user.email)
+      const { approved, admin, superAdmin, allowedAdminPages } = await checkUserApproval(result.user.email)
       setIsApproved(approved)
       setIsAdmin(admin)
+      setIsSuperAdmin(superAdmin)
+      setAllowedAdminPages(allowedAdminPages)
       return { isApproved: approved, isAdmin: admin }
     }
     return { isApproved: false, isAdmin: false }
@@ -125,9 +162,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithEmail = async (email: string, password: string) => {
     const result = await signInWithEmailAndPassword(auth, email, password)
     if (result.user.email) {
-      const { approved, admin } = await checkUserApproval(result.user.email)
+      const { approved, admin, superAdmin, allowedAdminPages } = await checkUserApproval(result.user.email)
       setIsApproved(approved)
       setIsAdmin(admin)
+      setIsSuperAdmin(superAdmin)
+      setAllowedAdminPages(allowedAdminPages)
       return { isApproved: approved, isAdmin: admin }
     }
     return { isApproved: false, isAdmin: false }
@@ -137,9 +176,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const result = await createUserWithEmailAndPassword(auth, email, password)
     if (result.user.email) {
       const normalizedEmail = result.user.email.toLowerCase()
-      const { approved, admin, approvalSource } = await checkUserApproval(normalizedEmail)
+      const { approved, admin, superAdmin, allowedAdminPages, approvalSource } = await checkUserApproval(normalizedEmail)
       setIsApproved(approved)
       setIsAdmin(admin)
+      setIsSuperAdmin(superAdmin)
+      setAllowedAdminPages(allowedAdminPages)
       
       const fullName = `${profile.firstName} ${profile.lastName}`
       
@@ -210,6 +251,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         isApproved,
         isAdmin,
+        isSuperAdmin,
+        allowedAdminPages,
         checkingApproval,
         signInWithGoogle,
         signInWithEmail,

@@ -4,50 +4,24 @@ import Link from "next/link"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import {
-  BookOpen,
-  Calendar,
-  Users,
-  FileText,
-  Settings,
-  ArrowLeft,
-  ImageIcon,
-  Video,
-  Megaphone,
-  Camera,
-  Database,
-  BarChart3,
-  UserCog,
-  Contact,
-  FolderOpen,
-  Bell,
-  Mail,
-  Activity,
-} from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
-
-const menuItems = [
-  { href: "/admin/requests", icon: FileText, label: "Requests" },
-  { href: "/admin/users", icon: UserCog, label: "User Accounts" },
-  { href: "/admin/analytics", icon: BarChart3, label: "Analytics" },
-  { href: "/admin/debug/tracking", icon: Activity, label: "Tracking Debug" },
-  { href: "/admin/notifications", icon: Bell, label: "Push Notifications" },
-  { href: "/admin/email-blast", icon: Mail, label: "Email Blast" },
-  { href: "/admin/announcements", icon: Megaphone, label: "Announcements" },
-  { href: "/admin/upcoming-shiur", icon: Video, label: "Upcoming Shiur" },
-  { href: "/admin/shiurim", icon: BookOpen, label: "Shiur Database" },
-  { href: "/admin/collections", icon: FolderOpen, label: "Shiur Collections" },
-  { href: "/admin/events", icon: Calendar, label: "Events & Simchos" },
-  { href: "/admin/alumni", icon: Database, label: "Alumni Management" },
-  { href: "/admin/contacts", icon: Users, label: "Rebbeim Directory" },
-  { href: "/admin/alumni-contacts", icon: Contact, label: "Alumni Contacts" },
-  { href: "/admin/carousel", icon: ImageIcon, label: "Carousel Images" },
-  { href: "/admin/alumni-photos", icon: Camera, label: "Alumni Photos" },
-  { href: "/admin/settings", icon: Settings, label: "Site Settings" },
-]
+import { useAuth } from "@/lib/auth-context"
+import { ADMIN_PAGES } from "@/lib/admin-pages"
 
 export function AdminSidebar() {
   const pathname = usePathname()
+  const { isSuperAdmin, allowedAdminPages } = useAuth()
+
+  // Hide super-admin-only items unless this user IS the super-admin.
+  // Otherwise: show items the user has been explicitly granted, OR all items
+  // when no restrictions are configured (back-compat for legacy admins).
+  const visibleItems = ADMIN_PAGES.filter((item) => {
+    if (item.superAdminOnly) return isSuperAdmin
+    if (isSuperAdmin) return true
+    if (allowedAdminPages === null) return true
+    return allowedAdminPages.includes(item.href)
+  })
 
   return (
     <div className="flex h-screen w-64 flex-col border-r border-gold/20 bg-navy">
@@ -65,7 +39,7 @@ export function AdminSidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto p-4">
         <ul className="space-y-2">
-          {menuItems.map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon
             const isActive = pathname === item.href
             return (

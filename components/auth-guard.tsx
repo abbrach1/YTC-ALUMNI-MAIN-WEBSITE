@@ -5,9 +5,18 @@ import type React from "react"
 import { useAuth } from "@/lib/auth-context"
 import { useRouter, usePathname } from "next/navigation"
 import { useEffect } from "react"
+import { canAccessAdminPath } from "@/lib/admin-pages"
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { user, loading, isApproved, isAdmin, checkingApproval } = useAuth()
+  const {
+    user,
+    loading,
+    isApproved,
+    isAdmin,
+    isSuperAdmin,
+    allowedAdminPages,
+    checkingApproval,
+  } = useAuth()
   const router = useRouter()
   const pathname = usePathname()
 
@@ -30,18 +39,35 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       return
     }
 
-    // Check admin routes
-    if (pathname.startsWith("/admin") && !isAdmin) {
-      router.push("/access-denied")
+    // Admin route checks: must be admin AND have access to this specific path.
+    if (pathname.startsWith("/admin")) {
+      if (!isAdmin) {
+        router.push("/access-denied")
+        return
+      }
+      if (!canAccessAdminPath(pathname, isSuperAdmin, allowedAdminPages)) {
+        router.push("/access-denied")
+        return
+      }
       return
     }
 
     // Check if user is approved (for non-admin routes)
-    if (!pathname.startsWith("/admin") && !isApproved && !isAdmin) {
+    if (!isApproved && !isAdmin) {
       router.push("/request-access")
       return
     }
-  }, [user, loading, isApproved, isAdmin, checkingApproval, pathname, router])
+  }, [
+    user,
+    loading,
+    isApproved,
+    isAdmin,
+    isSuperAdmin,
+    allowedAdminPages,
+    checkingApproval,
+    pathname,
+    router,
+  ])
 
   if (loading || checkingApproval) {
     return (
