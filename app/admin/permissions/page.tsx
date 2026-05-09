@@ -10,8 +10,10 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
-import { Loader2, Shield, ShieldCheck, RefreshCw, Save } from "lucide-react"
+import { Loader2, Shield, ShieldCheck, RefreshCw, Save, UserPlus } from "lucide-react"
 
 interface AdminRecord {
   email: string
@@ -27,6 +29,8 @@ export default function AdminPermissionsPage() {
   const [loading, setLoading] = useState(true)
   const [savingEmail, setSavingEmail] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, AdminRecord>>({})
+  const [newAdminEmail, setNewAdminEmail] = useState("")
+  const [addingAdmin, setAddingAdmin] = useState(false)
 
   const fetchAdmins = async () => {
     setLoading(true)
@@ -104,6 +108,35 @@ export default function AdminPermissionsPage() {
       else set.delete(href)
       return { ...prev, pages: Array.from(set) }
     })
+  }
+
+  const handleAddAdmin = async () => {
+    const raw = newAdminEmail.trim().toLowerCase()
+    if (!raw) return
+    // Lightweight email check — Firebase auth will catch real validation later
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
+      toast({ title: "Invalid email", variant: "destructive" })
+      return
+    }
+    if (admins.some((a) => a.email === raw)) {
+      toast({ title: "Already an admin", description: raw })
+      return
+    }
+    setAddingAdmin(true)
+    try {
+      await setDoc(doc(db, "admins", raw), {
+        email: raw,
+        addedAt: new Date().toISOString(),
+      })
+      toast({ title: "Admin added", description: `${raw} now has full admin access.` })
+      setNewAdminEmail("")
+      await fetchAdmins()
+    } catch (error: any) {
+      console.error("Error adding admin:", error)
+      toast({ title: "Error adding admin", description: error.message, variant: "destructive" })
+    } finally {
+      setAddingAdmin(false)
+    }
   }
 
   const handleSave = async (email: string) => {
@@ -188,6 +221,59 @@ export default function AdminPermissionsPage() {
           Refresh
         </Button>
       </div>
+
+      <Card className="border-gold/20 bg-white shadow-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-navy text-lg flex items-center gap-2">
+            <UserPlus className="h-5 w-5 text-gold" />
+            Add Admin
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              handleAddAdmin()
+            }}
+            className="flex flex-col sm:flex-row sm:items-end gap-3"
+          >
+            <div className="flex-1 space-y-1.5">
+              <Label htmlFor="newAdminEmail" className="text-sm text-navy">
+                Email
+              </Label>
+              <Input
+                id="newAdminEmail"
+                type="email"
+                placeholder="someone@example.com"
+                value={newAdminEmail}
+                onChange={(e) => setNewAdminEmail(e.target.value)}
+                disabled={addingAdmin}
+                className="border-navy/20"
+              />
+            </div>
+            <Button
+              type="submit"
+              disabled={addingAdmin || !newAdminEmail.trim()}
+              className="bg-navy text-cream hover:bg-navy/90"
+            >
+              {addingAdmin ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Adding...
+                </>
+              ) : (
+                <>
+                  <UserPlus className="h-4 w-4 mr-2" />
+                  Add Admin
+                </>
+              )}
+            </Button>
+          </form>
+          <p className="text-xs text-navy/60 mt-2">
+            New admins start with full access. Lock them down to specific pages below.
+          </p>
+        </CardContent>
+      </Card>
 
       {loading ? (
         <div className="flex items-center justify-center py-20">

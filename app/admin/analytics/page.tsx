@@ -38,6 +38,7 @@ import {
 } from "recharts"
 import {
   BarChart3,
+  ChevronDown,
   Download,
   Eye,
   Loader2,
@@ -159,6 +160,7 @@ export default function AnalyticsPage() {
   const [dailyAggregates, setDailyAggregates] = useState<Record<string, DailyAggregate>>({})
   const [dateRangeList, setDateRangeList] = useState<string[]>([])
   const [shiurInfo, setShiurInfo] = useState<Record<string, ShiurInfo>>({})
+  const [usersByPlatformOpen, setUsersByPlatformOpen] = useState(false)
   const [pageViewTotals, setPageViewTotals] = useState<{
     totalPageViews: number
     uniqueVisitors: number
@@ -437,6 +439,76 @@ export default function AnalyticsPage() {
       }))
       .sort((a, b) => b.count - a.count)
   }, [stats.platformCounts])
+
+  // Users grouped by platform — answers "who used the Android app", etc.
+  // Sources: pageViews (mobile pageview API events), plays, downloads.
+  // Anonymous events (no userId/email) are skipped since they can't be named.
+  const usersByPlatform = useMemo(() => {
+    type UserStat = {
+      key: string
+      email: string | null
+      name: string
+      events: number
+      lastSeen: Date | null
+    }
+    const byPlatform: Record<string, Record<string, UserStat>> = {}
+
+    const visit = (
+      platform: string | null,
+      userId: string | null,
+      userEmail: string | null,
+      userName: string | null,
+      timestamp: Date | null,
+    ) => {
+      const p = platform || "unknown"
+      const key = userId || userEmail
+      if (!key) return // anonymous events have no identity to group
+      byPlatform[p] = byPlatform[p] || {}
+      const existing = byPlatform[p][key]
+      const name = userName || userEmail || "Anonymous"
+      if (!existing) {
+        byPlatform[p][key] = {
+          key,
+          email: userEmail,
+          name,
+          events: 1,
+          lastSeen: timestamp,
+        }
+      } else {
+        existing.events += 1
+        if (timestamp && (!existing.lastSeen || timestamp > existing.lastSeen)) {
+          existing.lastSeen = timestamp
+          existing.name = name
+        }
+      }
+    }
+
+    pageViews.forEach((pv) =>
+      visit(pv.platform, pv.userId, pv.userEmail, pv.userName, pv.timestamp),
+    )
+    plays.forEach((e) =>
+      visit(e.platform, e.userId, e.userEmail, e.userName, e.timestamp),
+    )
+    downloads.forEach((e) =>
+      visit(e.platform, e.userId, e.userEmail, e.userName, e.timestamp),
+    )
+
+    return Object.entries(byPlatform)
+      .map(([platform, users]) => {
+        const userList = Object.values(users).sort((a, b) => {
+          const at = a.lastSeen?.getTime() ?? 0
+          const bt = b.lastSeen?.getTime() ?? 0
+          return bt - at
+        })
+        return {
+          platform,
+          label: platformLabel(platform),
+          color: PLATFORM_COLORS[platform] || PLATFORM_COLORS.unknown,
+          users: userList,
+        }
+      })
+      .sort((a, b) => b.users.length - a.users.length)
+  }, [pageViews, plays, downloads])
 
   const topShiurim = useMemo(() => {
     const counts: Record<string, { plays: number; downloads: number }> = {}
@@ -1136,6 +1208,84 @@ export default function AnalyticsPage() {
               </div>
             )}
           </div>
+
+          {/* Users grouped by platform — at the bottom and collapsed by default
+              since it's a deep-dive view (e.g. "who used the Android app"). */}
+          <Card className="border-gold/20 bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => setUsersByPlatformOpen((v) => !v)}
+              aria-expanded={usersByPlatformOpen}
+              className="w-full flex items-center justify-between gap-3 p-6 text-left hover:bg-gold/5 transition-colors rounded-t-lg"
+            >
+              <div className="flex items-center gap-2">
+                <Smartphone className="h-5 w-5 text-gold" />
+                <span className="font-semibold text-navy text-lg">Users by Platform</span>
+                <span className="text-xs text-navy/50">
+                  {usersByPlatform.length} platform
+                  {usersByPlatform.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <ChevronDown
+                className={`h-5 w-5 text-navy/60 transition-transform ${
+                  usersByPlatformOpen ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+            {usersByPlatformOpen && (
+              <CardContent className="pt-0">
+                {usersByPlatform.length === 0 ? (
+                  <EmptyState message="No platform-tagged user activity in this range yet." />
+                ) : (
+                  <div className="space-y-5">
+                    {usersByPlatform.map((group) => (
+                      <div key={group.platform}>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span
+                            className="h-3 w-3 rounded-sm flex-shrink-0"
+                            style={{ backgroundColor: group.color }}
+                          />
+                          <h4 className="text-sm font-semibold text-navy">
+                            {group.label}
+                          </h4>
+                          <span className="text-xs text-navy/50">
+                            {group.users.length} user
+                            {group.users.length === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                        <ul className="grid gap-2 sm:grid-cols-2">
+                          {group.users.map((u) => (
+                            <li
+                              key={u.key}
+                              className="flex items-center gap-2.5 p-2 rounded-md border border-navy/5 bg-cream/30"
+                            >
+                              <span className="flex-shrink-0 h-7 w-7 rounded-full bg-navy/5 flex items-center justify-center">
+                                <UserIcon className="h-3.5 w-3.5 text-navy/60" />
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-navy truncate">
+                                  {u.name}
+                                </p>
+                                {u.email && u.email !== u.name && (
+                                  <p className="text-[11px] text-navy/50 truncate">
+                                    {u.email}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex flex-col items-end text-[11px] text-navy/55 flex-shrink-0">
+                                <span>{u.events} events</span>
+                                <span>{formatTime(u.lastSeen)}</span>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            )}
+          </Card>
         </>
       )}
     </div>
