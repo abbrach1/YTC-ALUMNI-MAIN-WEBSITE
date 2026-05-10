@@ -20,6 +20,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { EmailSubscriptionsTab } from "@/components/admin/email-subscriptions-tab"
 import {
   ChartContainer,
   ChartTooltip,
@@ -764,28 +766,41 @@ export default function AnalyticsPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-end justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="font-serif text-3xl font-bold text-navy mb-1">Usage Analytics</h1>
-          <p className="text-navy/70">
-            Plays, downloads, and listener activity across web and mobile
-          </p>
-        </div>
-        <Select value={range} onValueChange={(v) => setRange(v as Range)}>
-          <SelectTrigger className="w-[180px] border-gold/30 bg-white">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {(Object.keys(RANGE_LABELS) as Range[]).map((r) => (
-              <SelectItem key={r} value={r}>
-                {RANGE_LABELS[r]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div>
+        <h1 className="font-serif text-3xl font-bold text-navy mb-1">Analytics</h1>
+        <p className="text-navy/70">
+          Site activity, listener engagement, and email subscriptions
+        </p>
       </div>
+
+      <Tabs defaultValue="activity" className="space-y-6">
+        <TabsList className="bg-white border border-gold/20">
+          <TabsTrigger value="activity" className="data-[state=active]:bg-navy data-[state=active]:text-cream">
+            Activity
+          </TabsTrigger>
+          <TabsTrigger value="subscriptions" className="data-[state=active]:bg-navy data-[state=active]:text-cream">
+            Email Subscriptions
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="activity" className="space-y-8">
+          {/* Range selector for the Activity tab only */}
+          <div className="flex justify-end">
+            <Select value={range} onValueChange={(v) => setRange(v as Range)}>
+              <SelectTrigger className="w-[180px] border-gold/30 bg-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(RANGE_LABELS) as Range[]).map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {RANGE_LABELS[r]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
       {loading ? (
         <div className="flex items-center justify-center py-24">
@@ -1288,6 +1303,12 @@ export default function AnalyticsPage() {
           </Card>
         </>
       )}
+        </TabsContent>
+
+        <TabsContent value="subscriptions">
+          <EmailSubscriptionsTab />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
