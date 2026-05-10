@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast"
 import { Bell, Send, Loader2, History } from "lucide-react"
 import { collection, getDocs, query, orderBy } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { sanitizeTopicName } from "@/lib/fcm-topics"
 
 interface Rebbe {
   id: string
@@ -102,10 +103,10 @@ export default function NotificationsPage() {
     fetchHistory()
   }, [])
 
-  // Sanitize rebbe name for FCM topic
-  const sanitizeRabbeName = (name: string) => {
-    return name.toLowerCase().replace(/[^a-z0-9]/g, "_")
-  }
+  // Sanitize rebbe name for FCM topic — shared with the iOS app and the
+  // automatic per-upload fan-out (lib/fcm-topics.ts) so both sides produce
+  // identical topic strings.
+  const sanitizeRabbeName = (name: string) => sanitizeTopicName(name)
 
   // Get the topics that will be sent to based on current form state
   const getTopics = (): string[] => {

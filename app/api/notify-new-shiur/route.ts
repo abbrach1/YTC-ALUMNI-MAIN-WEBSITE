@@ -4,16 +4,9 @@ import { collection, getDocs } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { getAdminMessaging } from "@/lib/firebase-admin"
 import { NewShiurNotificationEmail } from "@/emails/new-shiur-notification"
+import { rebbeTopic, tagTopic } from "@/lib/fcm-topics"
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://alumni.ytchaim.com"
-
-// Mirrors NotificationManager.sanitizeTopicName in the iOS app
-// (repo abbrach1/ytcalumni1): lowercase, then replace every non-alphanumeric
-// Unicode scalar with `_`. Multiple non-alnum chars in a row each become
-// their own underscore (no collapsing).
-function sanitizeTopicName(rebbe: string): string {
-  return rebbe.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "_")
-}
 
 interface NotifyShiurBody {
   shiurId?: string
@@ -93,17 +86,23 @@ export async function POST(request: Request) {
       `[notify-new-shiur] ${matched.length} of ${subsSnapshot.size} subscribers match (rebbe="${rebbe}", tags=[${tags.join(",")}])`,
     )
 
-    // Build the unique set of rebbeim to push to from the matched subscribers'
-    // rebbeim arrays. Only includes the shiur's rebbe if at least one
-    // subscriber selected it — duplicates collapse via Set.
-    // Note: tag-topic FCM fan-out is intentionally NOT implemented yet —
-    // iOS does not subscribe to tag topics, only rebbe_<sanitized> topics.
+    // Build the unique sets of rebbeim AND tags to push to, gated on whether
+    // any subscriber matched. iOS / Android devices subscribe to both
+    // rebbe_<sanitized> and tag_<sanitized> FCM topics based on the user's
+    // picks in subscriptions/{uid}; this server-side fan-out delivers the
+    // push for every topic that has at least one matching subscriber.
+    //
+    // Dedupe caveat: a user subscribed to BOTH the shiur's rebbe AND one of
+    // its tags will receive two pushes (one per topic). Acceptable for v1;
+    // harden later with FCM condition expressions if needed.
     const uniqueRebbeim = new Set<string>()
+    const uniqueTags = new Set<string>()
     for (const m of matched) {
       if (m.matchedRebbe) uniqueRebbeim.add(rebbe)
+      for (const t of m.matchedTags) uniqueTags.add(t)
     }
 
-    if (matched.length === 0 && uniqueRebbeim.size === 0) {
+    if (matched.length === 0 && uniqueRebbeim.size === 0 && uniqueTags.size === 0) {
       return NextResponse.json({
         success: true,
         sent: 0,
@@ -143,24 +142,44 @@ export async function POST(request: Request) {
 
     // FCM fan-out — runs in parallel with email but its failures must not
     // block or fail the email send. Per-topic errors are logged below.
+    type PushTarget =
+      | { kind: "rebbe"; name: string; topic: string }
+      | { kind: "tag"; name: string; topic: string }
+
     const messaging = getAdminMessaging()
-    const rebbeimToPush = Array.from(uniqueRebbeim)
+    const targetsToPush: PushTarget[] = [
+      ...Array.from(uniqueRebbeim).map<PushTarget>((name) => ({
+        kind: "rebbe",
+        name,
+        topic: rebbeTopic(name),
+      })),
+      ...Array.from(uniqueTags).map<PushTarget>((name) => ({
+        kind: "tag",
+        name,
+        topic: tagTopic(name),
+      })),
+    ]
     const pushNotificationTitle = "New shiur uploaded"
     const pushTimestamp = new Date().toISOString()
 
     const pushPromise: Promise<
-      Array<PromiseSettledResult<{ topic: string; messageId: string }>>
+      Array<PromiseSettledResult<{ topic: string; kind: PushTarget["kind"]; messageId: string }>>
     > = messaging
       ? Promise.allSettled(
-          rebbeimToPush.map(async (r) => {
-            const topic = `rebbe_${sanitizeTopicName(r)}`
-            const body = `${title} — ${r}`
+          targetsToPush.map(async (t) => {
+            // Body: "<shiur title> — <rebbe>" for rebbe pushes, "<shiur
+            // title> — #<tag>" for tag pushes, so the user can tell at a
+            // glance why they got the push.
+            const bodySuffix = t.kind === "rebbe" ? t.name : `#${t.name}`
+            const body = `${title} — ${bodySuffix}`
             const messageId = await messaging.send({
               notification: { title: pushNotificationTitle, body },
               data: {
                 type: "new_shiur",
                 shiurId: shiurId ?? "",
-                rebbe: r,
+                rebbe,
+                matchKind: t.kind,
+                matchName: t.name,
                 timestamp: pushTimestamp,
               },
               apns: {
@@ -172,9 +191,9 @@ export async function POST(request: Request) {
                   },
                 },
               },
-              topic,
+              topic: t.topic,
             })
-            return { topic, messageId }
+            return { topic: t.topic, kind: t.kind, messageId }
           }),
         )
       : Promise.resolve([])
@@ -192,19 +211,20 @@ export async function POST(request: Request) {
     }
 
     const pushTopics: string[] = []
-    const pushErrors: Array<{ rebbe: string; error: string }> = []
+    const pushErrors: Array<{ kind: PushTarget["kind"]; name: string; error: string }> = []
     pushResults.forEach((res, i) => {
       if (res.status === "fulfilled") {
         pushTopics.push(res.value.topic)
       } else {
         pushErrors.push({
-          rebbe: rebbeimToPush[i],
+          kind: targetsToPush[i].kind,
+          name: targetsToPush[i].name,
           error: res.reason?.message || String(res.reason),
         })
       }
     })
 
-    if (!messaging && rebbeimToPush.length > 0) {
+    if (!messaging && targetsToPush.length > 0) {
       console.warn(
         "[notify-new-shiur] FCM: skipped — Firebase Admin not configured (FIREBASE_SERVICE_ACCOUNT_KEY missing)",
       )
@@ -213,13 +233,13 @@ export async function POST(request: Request) {
     if (pushErrors.length > 0) {
       for (const err of pushErrors) {
         console.error(
-          `[notify-new-shiur] FCM: failed to push to rebbe="${err.rebbe}": ${err.error}`,
+          `[notify-new-shiur] FCM: failed to push to ${err.kind}="${err.name}": ${err.error}`,
         )
       }
     }
 
     console.log(
-      `[notify-new-shiur] FCM: pushed to ${pushTopics.length} rebbe topic(s): ${pushTopics.join(", ")}`,
+      `[notify-new-shiur] FCM: pushed to ${pushTopics.length} topic(s) — ${uniqueRebbeim.size} rebbe + ${uniqueTags.size} tag — ${pushTopics.join(", ")}`,
     )
 
     return NextResponse.json({
@@ -229,6 +249,10 @@ export async function POST(request: Request) {
       matched: matched.length,
       pushSent: pushTopics.length,
       pushTopics,
+      pushBreakdown: {
+        rebbeim: uniqueRebbeim.size,
+        tags: uniqueTags.size,
+      },
     })
   } catch (error: any) {
     console.error("[notify-new-shiur] Error:", error)
