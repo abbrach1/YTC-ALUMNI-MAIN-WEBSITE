@@ -2,9 +2,18 @@ import { NextResponse } from "next/server"
 import { getResend, FROM_EMAIL, REPLY_TO_EMAIL } from "@/lib/resend"
 import { collection, getDocs } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { getAdminMessaging } from "@/lib/firebase-admin"
 import { NewShiurNotificationEmail } from "@/emails/new-shiur-notification"
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://alumni.ytchaim.com"
+
+// Mirrors NotificationManager.sanitizeTopicName in the iOS app
+// (repo abbrach1/ytcalumni1): lowercase, then replace every non-alphanumeric
+// Unicode scalar with `_`. Multiple non-alnum chars in a row each become
+// their own underscore (no collapsing).
+function sanitizeTopicName(rebbe: string): string {
+  return rebbe.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "_")
+}
 
 interface NotifyShiurBody {
   shiurId?: string
@@ -84,15 +93,31 @@ export async function POST(request: Request) {
       `[notify-new-shiur] ${matched.length} of ${subsSnapshot.size} subscribers match (rebbe="${rebbe}", tags=[${tags.join(",")}])`,
     )
 
-    if (matched.length === 0) {
-      return NextResponse.json({ success: true, sent: 0, totalSubscribers: subsSnapshot.size })
+    // Build the unique set of rebbeim to push to from the matched subscribers'
+    // rebbeim arrays. Only includes the shiur's rebbe if at least one
+    // subscriber selected it — duplicates collapse via Set.
+    // Note: tag-topic FCM fan-out is intentionally NOT implemented yet —
+    // iOS does not subscribe to tag topics, only rebbe_<sanitized> topics.
+    const uniqueRebbeim = new Set<string>()
+    for (const m of matched) {
+      if (m.matchedRebbe) uniqueRebbeim.add(rebbe)
+    }
+
+    if (matched.length === 0 && uniqueRebbeim.size === 0) {
+      return NextResponse.json({
+        success: true,
+        sent: 0,
+        totalSubscribers: subsSnapshot.size,
+        pushSent: 0,
+        pushTopics: [],
+      })
     }
 
     const shiurUrl = shiurId ? `${SITE_URL}/shiurim?play=${encodeURIComponent(shiurId)}` : `${SITE_URL}/shiurim`
     const manageSubscriptionsUrl = `${SITE_URL}/subscriptions`
 
     const resend = getResend()
-    const results = await Promise.allSettled(
+    const emailPromise = Promise.allSettled(
       matched.map((sub) =>
         resend.emails.send({
           from: FROM_EMAIL,
@@ -116,6 +141,46 @@ export async function POST(request: Request) {
       ),
     )
 
+    // FCM fan-out — runs in parallel with email but its failures must not
+    // block or fail the email send. Per-topic errors are logged below.
+    const messaging = getAdminMessaging()
+    const rebbeimToPush = Array.from(uniqueRebbeim)
+    const pushNotificationTitle = "New shiur uploaded"
+    const pushTimestamp = new Date().toISOString()
+
+    const pushPromise: Promise<
+      Array<PromiseSettledResult<{ topic: string; messageId: string }>>
+    > = messaging
+      ? Promise.allSettled(
+          rebbeimToPush.map(async (r) => {
+            const topic = `rebbe_${sanitizeTopicName(r)}`
+            const body = `${title} — ${r}`
+            const messageId = await messaging.send({
+              notification: { title: pushNotificationTitle, body },
+              data: {
+                type: "new_shiur",
+                shiurId: shiurId ?? "",
+                rebbe: r,
+                timestamp: pushTimestamp,
+              },
+              apns: {
+                payload: {
+                  aps: {
+                    badge: 1,
+                    sound: "default",
+                    alert: { title: pushNotificationTitle, body },
+                  },
+                },
+              },
+              topic,
+            })
+            return { topic, messageId }
+          }),
+        )
+      : Promise.resolve([])
+
+    const [results, pushResults] = await Promise.all([emailPromise, pushPromise])
+
     const sent = results.filter((r) => r.status === "fulfilled").length
     const failed = results.length - sent
 
@@ -126,7 +191,45 @@ export async function POST(request: Request) {
       )
     }
 
-    return NextResponse.json({ success: true, sent, failed, matched: matched.length })
+    const pushTopics: string[] = []
+    const pushErrors: Array<{ rebbe: string; error: string }> = []
+    pushResults.forEach((res, i) => {
+      if (res.status === "fulfilled") {
+        pushTopics.push(res.value.topic)
+      } else {
+        pushErrors.push({
+          rebbe: rebbeimToPush[i],
+          error: res.reason?.message || String(res.reason),
+        })
+      }
+    })
+
+    if (!messaging && rebbeimToPush.length > 0) {
+      console.warn(
+        "[notify-new-shiur] FCM: skipped — Firebase Admin not configured (FIREBASE_SERVICE_ACCOUNT_KEY missing)",
+      )
+    }
+
+    if (pushErrors.length > 0) {
+      for (const err of pushErrors) {
+        console.error(
+          `[notify-new-shiur] FCM: failed to push to rebbe="${err.rebbe}": ${err.error}`,
+        )
+      }
+    }
+
+    console.log(
+      `[notify-new-shiur] FCM: pushed to ${pushTopics.length} rebbe topic(s): ${pushTopics.join(", ")}`,
+    )
+
+    return NextResponse.json({
+      success: true,
+      sent,
+      failed,
+      matched: matched.length,
+      pushSent: pushTopics.length,
+      pushTopics,
+    })
   } catch (error: any) {
     console.error("[notify-new-shiur] Error:", error)
     return NextResponse.json({ error: error.message || "Failed to send notifications" }, { status: 500 })
