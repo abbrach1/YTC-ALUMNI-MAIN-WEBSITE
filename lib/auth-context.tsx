@@ -32,6 +32,11 @@ interface AuthContextType {
    * admins whose Firestore doc has no `pages` field).
    */
   allowedAdminPages: string[] | null
+  /**
+   * Whether this user is permitted to upload shiurim (mirrors the
+   * `shiurUploaders/{email}` Firestore collection). Admins always count.
+   */
+  canUploadShiurim: boolean
   checkingApproval: boolean
   signInWithGoogle: () => Promise<{ isApproved: boolean; isAdmin: boolean }>
   signInWithEmail: (email: string, password: string) => Promise<{ isApproved: boolean; isAdmin: boolean }>
@@ -46,6 +51,7 @@ async function checkUserApproval(email: string): Promise<{
   admin: boolean
   superAdmin: boolean
   allowedAdminPages: string[] | null
+  canUploadShiurim: boolean
   approvalSource?: string
 }> {
   const normalizedEmail = email.toLowerCase()
@@ -108,7 +114,14 @@ async function checkUserApproval(email: string): Promise<{
   const superAdmin = admin && normalizedEmail === SUPER_ADMIN_EMAIL.toLowerCase()
   if (superAdmin) allowedAdminPages = null
 
-  return { approved, admin, superAdmin, allowedAdminPages, approvalSource }
+  // Shiur-upload permission: presence in shiurUploaders OR being any admin.
+  let canUploadShiurim = admin
+  if (!canUploadShiurim) {
+    const uploaderSnap = await getDoc(doc(db, "shiurUploaders", normalizedEmail))
+    if (uploaderSnap.exists()) canUploadShiurim = true
+  }
+
+  return { approved, admin, superAdmin, allowedAdminPages, canUploadShiurim, approvalSource }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -118,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false)
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [allowedAdminPages, setAllowedAdminPages] = useState<string[] | null>(null)
+  const [canUploadShiurim, setCanUploadShiurim] = useState(false)
   const [checkingApproval, setCheckingApproval] = useState(false)
 
   useEffect(() => {
@@ -126,16 +140,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setCheckingApproval(true)
 
       if (user && user.email) {
-        const { approved, admin, superAdmin, allowedAdminPages } = await checkUserApproval(user.email)
+        const { approved, admin, superAdmin, allowedAdminPages, canUploadShiurim } = await checkUserApproval(user.email)
         setIsApproved(approved)
         setIsAdmin(admin)
         setIsSuperAdmin(superAdmin)
         setAllowedAdminPages(allowedAdminPages)
+        setCanUploadShiurim(canUploadShiurim)
       } else {
         setIsApproved(false)
         setIsAdmin(false)
         setIsSuperAdmin(false)
         setAllowedAdminPages(null)
+        setCanUploadShiurim(false)
       }
 
       setCheckingApproval(false)
@@ -149,11 +165,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const provider = new GoogleAuthProvider()
     const result = await signInWithPopup(auth, provider)
     if (result.user.email) {
-      const { approved, admin, superAdmin, allowedAdminPages } = await checkUserApproval(result.user.email)
+      const { approved, admin, superAdmin, allowedAdminPages, canUploadShiurim } = await checkUserApproval(result.user.email)
       setIsApproved(approved)
       setIsAdmin(admin)
       setIsSuperAdmin(superAdmin)
       setAllowedAdminPages(allowedAdminPages)
+      setCanUploadShiurim(canUploadShiurim)
       return { isApproved: approved, isAdmin: admin }
     }
     return { isApproved: false, isAdmin: false }
@@ -162,11 +179,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithEmail = async (email: string, password: string) => {
     const result = await signInWithEmailAndPassword(auth, email, password)
     if (result.user.email) {
-      const { approved, admin, superAdmin, allowedAdminPages } = await checkUserApproval(result.user.email)
+      const { approved, admin, superAdmin, allowedAdminPages, canUploadShiurim } = await checkUserApproval(result.user.email)
       setIsApproved(approved)
       setIsAdmin(admin)
       setIsSuperAdmin(superAdmin)
       setAllowedAdminPages(allowedAdminPages)
+      setCanUploadShiurim(canUploadShiurim)
       return { isApproved: approved, isAdmin: admin }
     }
     return { isApproved: false, isAdmin: false }
@@ -176,11 +194,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const result = await createUserWithEmailAndPassword(auth, email, password)
     if (result.user.email) {
       const normalizedEmail = result.user.email.toLowerCase()
-      const { approved, admin, superAdmin, allowedAdminPages, approvalSource } = await checkUserApproval(normalizedEmail)
+      const { approved, admin, superAdmin, allowedAdminPages, canUploadShiurim, approvalSource } = await checkUserApproval(normalizedEmail)
       setIsApproved(approved)
       setIsAdmin(admin)
       setIsSuperAdmin(superAdmin)
       setAllowedAdminPages(allowedAdminPages)
+      setCanUploadShiurim(canUploadShiurim)
       
       const fullName = `${profile.firstName} ${profile.lastName}`
       
@@ -253,6 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAdmin,
         isSuperAdmin,
         allowedAdminPages,
+        canUploadShiurim,
         checkingApproval,
         signInWithGoogle,
         signInWithEmail,

@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type React from "react"
 import { useState, useEffect, useRef } from "react"
 import { useAuth } from "@/lib/auth-context"
+import { AuthGuard } from "@/components/auth-guard"
 import { useRouter } from "next/navigation"
 import { db } from "@/lib/firebase"
 import { collection, addDoc, doc, getDoc, setDoc } from "firebase/firestore"
@@ -558,16 +559,19 @@ export default function UploadShiurPage() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-cream via-cream to-gold/10 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-navy mx-auto mb-4" />
-          <p className="text-navy/70">Loading...</p>
+      <AuthGuard>
+        <div className="min-h-screen bg-gradient-to-br from-cream via-cream to-gold/10 flex items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="h-8 w-8 animate-spin text-navy mx-auto mb-4" />
+            <p className="text-navy/70">Loading...</p>
+          </div>
         </div>
-      </div>
+      </AuthGuard>
     )
   }
 
   return (
+    <AuthGuard>
     <div className="min-h-screen bg-gradient-to-br from-cream via-cream to-gold/10">
       <div className="mx-auto max-w-4xl px-4 py-12">
         <div className="mb-8">
@@ -1290,5 +1294,6 @@ export default function UploadShiurPage() {
         </Tabs>
       </div>
     </div>
+    </AuthGuard>
   )
 }

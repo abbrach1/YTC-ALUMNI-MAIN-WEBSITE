@@ -5,10 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { collection, getDocs, doc, getDoc, deleteDoc, query, where } from "firebase/firestore"
+import { Switch } from "@/components/ui/switch"
+import { collection, getDocs, doc, getDoc, deleteDoc, setDoc, query, where } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { auth } from "@/lib/firebase"
 import { useToast } from "@/hooks/use-toast"
-import { Search, Users, Trash2, CheckCircle, XCircle, Clock, RefreshCw } from "lucide-react"
+import { Search, Users, Trash2, CheckCircle, XCircle, Clock, RefreshCw, Upload } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -24,6 +26,7 @@ interface UserAccount {
   lastSignIn?: string
   isApproved: boolean
   isAdmin: boolean
+  canUploadShiurim: boolean
   approvalSource?: string
   accessRequestStatus?: string
 }
@@ -86,6 +89,14 @@ export default function UsersPage() {
         admins.add(doc.id)
       })
 
+      // Get shiur uploaders - users granted permission to upload shiurim from
+      // the mobile app. Doc id is the lowercased email; presence = permission.
+      const uploadersSnapshot = await getDocs(collection(db, "shiurUploaders"))
+      const uploaders = new Set<string>()
+      uploadersSnapshot.forEach((doc) => {
+        uploaders.add(doc.id)
+      })
+
       // Combine all unique emails from access requests (these are actual signups)
       const userAccounts: UserAccount[] = []
 
@@ -100,6 +111,7 @@ export default function UsersPage() {
           createdAt: data.requestedAt,
           isApproved,
           isAdmin,
+          canUploadShiurim: uploaders.has(email),
           approvalSource: isInAlumni ? "Alumni Database" : isInApproved ? "Manual Approval" : data.status === "approved" ? "Request Approved" : undefined,
           accessRequestStatus: data.status,
         })
@@ -118,6 +130,33 @@ export default function UsersPage() {
       toast({ title: "Error", description: error.message, variant: "destructive" })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleToggleUploader = async (email: string, allowed: boolean) => {
+    const ref = doc(db, "shiurUploaders", email)
+    // Optimistic update so the toggle feels instant
+    setUsers((prev) =>
+      prev.map((u) => (u.email === email ? { ...u, canUploadShiurim: allowed } : u)),
+    )
+    try {
+      if (allowed) {
+        await setDoc(ref, {
+          email,
+          grantedAt: new Date().toISOString(),
+          grantedBy: auth.currentUser?.email || null,
+        })
+        toast({ title: "Upload access granted", description: email })
+      } else {
+        await deleteDoc(ref)
+        toast({ title: "Upload access revoked", description: email })
+      }
+    } catch (error: any) {
+      // Roll back on failure
+      setUsers((prev) =>
+        prev.map((u) => (u.email === email ? { ...u, canUploadShiurim: !allowed } : u)),
+      )
+      toast({ title: "Error", description: error.message, variant: "destructive" })
     }
   }
 
@@ -165,6 +204,9 @@ export default function UsersPage() {
       
       // Remove from userProfiles if present
       await deleteDoc(doc(db, "userProfiles", email))
+
+      // Revoke shiur uploader permission if granted
+      await deleteDoc(doc(db, "shiurUploaders", email)).catch(() => {})
       
       toast({ 
         title: "Account Removed", 
@@ -247,6 +289,12 @@ export default function UsersPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-semibold text-navy">{user.email}</p>
                       {getStatusBadge(user)}
+                      {user.canUploadShiurim && (
+                        <Badge className="bg-blue-600 text-white">
+                          <Upload className="h-3 w-3 mr-1" />
+                          Uploader
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-navy/60">
                       {user.createdAt && (
@@ -257,7 +305,14 @@ export default function UsersPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer select-none" title="Allow this user to upload shiurim from the mobile app">
+                      <span className="text-xs font-medium text-navy/70">Can upload</span>
+                      <Switch
+                        checked={user.canUploadShiurim}
+                        onCheckedChange={(v) => handleToggleUploader(user.email, v)}
+                      />
+                    </label>
                     <Button
                       variant="outline"
                       size="sm"
@@ -306,14 +361,24 @@ export default function UsersPage() {
               <Badge variant="destructive">Denied</Badge>
               <span className="text-navy/70">Access was denied</span>
             </div>
+            <div className="flex items-center gap-2">
+              <Badge className="bg-blue-600 text-white">
+                <Upload className="h-3 w-3 mr-1" />
+                Uploader
+              </Badge>
+              <span className="text-navy/70">Can upload shiurim from the mobile app</span>
+            </div>
           </div>
           <div className="mt-4 p-4 bg-navy/5 rounded-lg">
             <p className="text-sm text-navy/70">
-              <strong>Reset Account:</strong> Removes the user's access request record, allowing them to sign up again with a new password. 
+              <strong>Reset Account:</strong> Removes the user's access request record, allowing them to sign up again with a new password.
               Use this if a user forgot their password and needs to create a new account.
             </p>
             <p className="text-sm text-navy/70 mt-2">
               <strong>Delete Account:</strong> Removes all records for this user including their access request and any manual approvals.
+            </p>
+            <p className="text-sm text-navy/70 mt-2">
+              <strong>Can upload:</strong> Toggle this on to let a user see and use the upload-shiur page in the Android/iOS app. The app reads from the <code className="bg-white border border-navy/10 rounded px-1.5 py-0.5 text-xs">shiurUploaders</code> Firestore collection.
             </p>
           </div>
         </CardContent>

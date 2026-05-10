@@ -4,7 +4,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { useAuth } from "@/lib/auth-context"
 import { Button } from "@/components/ui/button"
-import { Menu, User, Mail } from "lucide-react"
+import { Menu, User, Mail, Upload } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { useState } from "react"
 import { usePathname } from "next/navigation"
@@ -18,7 +18,7 @@ const navLinks = [
 ]
 
 export function Navbar() {
-  const { user, signOut, isAdmin } = useAuth()
+  const { user, signOut, isAdmin, canUploadShiurim } = useAuth()
   const [open, setOpen] = useState(false)
   const pathname = usePathname()
 
@@ -107,6 +107,14 @@ export function Navbar() {
                       Subscriptions
                     </Link>
                   </DropdownMenuItem>
+                  {canUploadShiurim && (
+                    <DropdownMenuItem asChild>
+                      <Link href="/upload-shiur" className="cursor-pointer text-navy hover:bg-gold/10">
+                        <Upload className="h-4 w-4 mr-2" />
+                        Upload Shiur
+                      </Link>
+                    </DropdownMenuItem>
+                  )}
                   {isAdmin && (
                     <DropdownMenuItem asChild>
                       <Link href="/admin" className="cursor-pointer text-navy hover:bg-gold/10">
@@ -178,6 +186,20 @@ export function Navbar() {
                   >
                     Subscriptions
                   </Link>
+                  {canUploadShiurim && (
+                    <Link
+                      href="/upload-shiur"
+                      onClick={() => setOpen(false)}
+                      className={`px-3 py-3 transition-colors text-base border-l-2 flex items-center gap-2 ${
+                        pathname === "/upload-shiur"
+                          ? "text-gold bg-cream/10 border-gold"
+                          : "text-cream hover:text-gold hover:bg-cream/5 border-transparent hover:border-gold"
+                      }`}
+                    >
+                      <Upload className="h-4 w-4" />
+                      Upload Shiur
+                    </Link>
+                  )}
                   {isAdmin && (
                     <>
                       <div className="h-px bg-gold/20 my-2" />

@@ -15,6 +15,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     isAdmin,
     isSuperAdmin,
     allowedAdminPages,
+    canUploadShiurim,
     checkingApproval,
   } = useAuth()
   const router = useRouter()
@@ -26,9 +27,17 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     // Public routes
     const publicRoutes = ["/login", "/request-access", "/admin-setup", "/upload-shiur"]
     if (publicRoutes.includes(pathname)) {
-      // For /upload-shiur, require authentication but not approval
-      if (pathname === "/upload-shiur" && !user) {
-        router.push("/login")
+      // /upload-shiur requires authentication AND explicit upload permission
+      // (admins always count). Other public routes are unrestricted.
+      if (pathname === "/upload-shiur") {
+        if (!user) {
+          router.push("/login")
+          return
+        }
+        if (!canUploadShiurim && !isAdmin) {
+          router.push("/access-denied")
+          return
+        }
       }
       return
     }
@@ -64,6 +73,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     isAdmin,
     isSuperAdmin,
     allowedAdminPages,
+    canUploadShiurim,
     checkingApproval,
     pathname,
     router,
