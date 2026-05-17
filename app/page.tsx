@@ -8,7 +8,7 @@ import { Navbar } from "@/components/navbar"
 import { AuthGuard } from "@/components/auth-guard"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Calendar, ChevronRight, ChevronDown, ChevronUp, ExternalLink, PartyPopper, Megaphone, Play, Download, X, Loader2, FolderOpen } from "lucide-react"
+import { Calendar, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, ExternalLink, PartyPopper, Megaphone, Play, Download, X, Loader2, FolderOpen } from "lucide-react"
 import Link from "next/link"
 import {
   Dialog,
@@ -17,6 +17,7 @@ import {
 import { collection, getDocs, query, orderBy, limit } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/lib/auth-context"
+import { isExpired } from "@/lib/expiry"
 import { trackPlay, trackDownload } from "@/lib/track-engagement"
 import { useToast } from "@/hooks/use-toast"
 
@@ -37,6 +38,7 @@ interface CarouselImage {
   url: string
   caption?: string
   order: number
+  enabled?: boolean
 }
 
 interface Event {
@@ -57,6 +59,8 @@ interface Announcement {
   type: "mazel_tov" | "announcement"
   date: string
   enabled: boolean
+  hideAfterDays?: number | null
+  timerStartAt?: string | null
 }
 
 interface AlumniPhoto {
@@ -88,7 +92,13 @@ export default function HomePage() {
   const [expandedPhoto, setExpandedPhoto] = useState<AlumniPhoto | null>(null)
   const [downloadingShiur, setDownloadingShiur] = useState(false)
   const [announcementsExpanded, setAnnouncementsExpanded] = useState(false)
-  const [featuredShiur, setFeaturedShiur] = useState<Shiur | null>(null)
+  const [featuredShiurim, setFeaturedShiurim] = useState<Shiur[]>([])
+  const [systemAnnouncement, setSystemAnnouncement] = useState<{
+    title: string
+    message: string
+    linkUrl: string
+    linkText: string
+  } | null>(null)
   const [activeCollection, setActiveCollection] = useState<{ id: string; name: string; description: string } | null>(null)
   const [playedShiurim, setPlayedShiurim] = useState<Set<string>>(new Set())
   const { user } = useAuth()
@@ -119,21 +129,47 @@ export default function HomePage() {
   }, [])
 
   useEffect(() => {
-    const fetchFeaturedShiur = async () => {
+    const fetchFeaturedShiurim = async () => {
       const { doc: docRef, getDoc } = await import("firebase/firestore")
       const settingsDoc = await getDoc(docRef(db, "settings", "featuredShiur"))
-      if (settingsDoc.exists()) {
-        const data = settingsDoc.data()
-        if (data.enabled && data.shiurId) {
-          // Fetch the actual shiur
-          const shiurDoc = await getDoc(docRef(db, "shiurim", data.shiurId))
-          if (shiurDoc.exists()) {
-            setFeaturedShiur({ id: shiurDoc.id, ...shiurDoc.data() } as Shiur)
-          }
-        }
-      }
+      if (!settingsDoc.exists()) return
+      const data = settingsDoc.data()
+      if (!data.enabled) return
+
+      // New format: shiurIds: string[]. Legacy format: shiurId: string.
+      const ids: string[] = Array.isArray(data.shiurIds)
+        ? data.shiurIds.filter((id: unknown): id is string => typeof id === "string" && id.length > 0)
+        : data.shiurId
+        ? [data.shiurId]
+        : []
+      if (ids.length === 0) return
+
+      const fetched = await Promise.all(
+        ids.map(async (id) => {
+          const snap = await getDoc(docRef(db, "shiurim", id))
+          return snap.exists() ? ({ id: snap.id, ...snap.data() } as Shiur) : null
+        }),
+      )
+      setFeaturedShiurim(fetched.filter((s): s is Shiur => s !== null))
     }
-    fetchFeaturedShiur()
+    fetchFeaturedShiurim()
+  }, [])
+
+  useEffect(() => {
+    const fetchSystemAnnouncement = async () => {
+      const { doc: docRef, getDoc } = await import("firebase/firestore")
+      const snap = await getDoc(docRef(db, "settings", "systemAnnouncement"))
+      if (!snap.exists()) return
+      const data = snap.data()
+      if (!data.enabled || !data.message || isExpired(data)) return
+      setSystemAnnouncement({
+        title: data.title || "",
+        message: data.message,
+        linkUrl: data.linkUrl || "",
+        linkText: data.linkText || "",
+      })
+    }
+    fetchSystemAnnouncement()
   }, [])
 
   useEffect(() => {
@@ -143,11 +179,11 @@ export default function HomePage() {
       
       querySnapshot.forEach((docSnap) => {
         const data = docSnap.data()
-        if (data.isActive) {
-          setActiveCollection({ 
-            id: docSnap.id, 
-            name: data.name, 
-            description: data.description 
+        if (data.isActive && !isExpired(data)) {
+          setActiveCollection({
+            id: docSnap.id,
+            name: data.name,
+            description: data.description
           })
         }
       })
@@ -160,10 +196,18 @@ export default function HomePage() {
       const querySnapshot = await getDocs(collection(db, "carouselImages"))
       const images: CarouselImage[] = []
       querySnapshot.forEach((doc) => {
-        images.push({ id: doc.id, ...doc.data() } as CarouselImage)
+        const data = doc.data() as CarouselImage
+        // Treat missing `enabled` as enabled (back-compat with images created before the toggle existed)
+        if (data.enabled !== false) {
+          images.push({ ...data, id: doc.id })
+        }
       })
       images.sort((a, b) => a.order - b.order)
       setCarouselImages(images)
+      // Start on a random image so visitors don't always see the same one first
+      if (images.length > 0) {
+        setCurrentImage(Math.floor(Math.random() * images.length))
+      }
     }
     fetchCarouselImages()
   }, [])
@@ -178,7 +222,7 @@ export default function HomePage() {
       const today = new Date().toISOString().split("T")[0]
       querySnapshot.forEach((doc) => {
         const data = doc.data()
-        if (data.date >= today) {
+        if (data.date >= today && !isExpired(data)) {
           eventsData.push({ id: doc.id, ...data } as Event)
         }
       })
@@ -194,7 +238,7 @@ export default function HomePage() {
       const items: Announcement[] = []
       querySnapshot.forEach((doc) => {
         const data = doc.data() as Announcement
-        if (data.enabled !== false) {
+        if (data.enabled !== false && !isExpired(data)) {
           items.push({ id: doc.id, ...data })
         }
       })
@@ -371,10 +415,84 @@ export default function HomePage() {
                 <p className="text-cream text-sm font-medium">{carouselImages[currentImage].caption}</p>
               </div>
             )}
+
+            {carouselImages.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={prevImage}
+                  aria-label="Previous image"
+                  className="absolute left-4 top-1/2 -translate-y-1/2 z-10 h-10 w-10 rounded-full bg-navy/40 hover:bg-navy/70 backdrop-blur-sm border border-gold/30 text-cream flex items-center justify-center transition-all hover:scale-110"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={nextImage}
+                  aria-label="Next image"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 z-10 h-10 w-10 rounded-full bg-navy/40 hover:bg-navy/70 backdrop-blur-sm border border-gold/30 text-cream flex items-center justify-center transition-all hover:scale-110"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+
+                <div
+                  className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-3 py-2 rounded-full bg-navy/40 backdrop-blur-sm border border-gold/20"
+                  role="tablist"
+                  aria-label="Carousel images"
+                >
+                  {carouselImages.map((image, index) => (
+                    <button
+                      key={image.id}
+                      type="button"
+                      onClick={() => setCurrentImage(index)}
+                      aria-label={`Go to image ${index + 1}`}
+                      aria-selected={index === currentImage}
+                      role="tab"
+                      className={`rounded-full transition-all ${
+                        index === currentImage
+                          ? "h-2 w-6 bg-gold"
+                          : "h-2 w-2 bg-cream/50 hover:bg-cream/80"
+                      }`}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </section>
 
         <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8 space-y-24">
+          {systemAnnouncement && (
+            <section>
+              <Card className="border-gold/30 bg-white shadow-md hover:shadow-xl transition-all duration-300 group overflow-hidden">
+                <div className="h-1 w-full bg-gradient-to-r from-gold via-gold-light to-gold" />
+                <CardHeader className="pb-3">
+                  {systemAnnouncement.title && (
+                    <CardTitle className="font-serif text-xl text-navy group-hover:text-navy-light transition-colors">
+                      {systemAnnouncement.title}
+                    </CardTitle>
+                  )}
+                </CardHeader>
+                <CardContent>
+                  <p className="text-navy/80 text-base leading-relaxed whitespace-pre-wrap">
+                    {systemAnnouncement.message}
+                  </p>
+                  {systemAnnouncement.linkUrl && (
+                    <a
+                      href={systemAnnouncement.linkUrl}
+                      target={systemAnnouncement.linkUrl.startsWith("http") ? "_blank" : undefined}
+                      rel={systemAnnouncement.linkUrl.startsWith("http") ? "noopener noreferrer" : undefined}
+                      className="inline-flex items-center gap-1 mt-4 text-gold-dark font-semibold hover:text-gold hover:underline transition-colors"
+                    >
+                      {systemAnnouncement.linkText || "Learn more"}
+                      <ChevronRight className="h-4 w-4" />
+                    </a>
+                  )}
+                </CardContent>
+              </Card>
+            </section>
+          )}
+
           {announcements.length > 0 && (
             <section>
               <div className="mb-12">
@@ -479,14 +597,18 @@ export default function HomePage() {
             </section>
           )}
 
-          {featuredShiur && (
+          {featuredShiurim.length > 0 && (
             <section className="mb-16">
               <div className="mb-8 text-center">
                 <div className="mx-auto mb-4 h-1 w-24 bg-gold" />
-                <h2 className="font-serif text-3xl font-bold text-navy">Featured Shiur</h2>
+                <h2 className="font-serif text-3xl font-bold text-navy">
+                  {featuredShiurim.length === 1 ? "Featured Shiur" : "Featured Shiurim"}
+                </h2>
               </div>
 
-              <Card className="border-gold/20 bg-white shadow-xl">
+              <div className="space-y-8">
+              {featuredShiurim.map((featuredShiur) => (
+              <Card key={featuredShiur.id} className="border-gold/20 bg-white shadow-xl">
                 <CardHeader className="border-b border-gold/20 bg-navy/5">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div>
@@ -592,6 +714,8 @@ export default function HomePage() {
                   </div>
                 </CardContent>
               </Card>
+              ))}
+              </div>
             </section>
           )}
 

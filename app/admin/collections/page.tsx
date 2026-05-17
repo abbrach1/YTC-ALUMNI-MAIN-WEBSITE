@@ -23,6 +23,7 @@ import {
 } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useToast } from "@/hooks/use-toast"
+import { computeTimerFields, formatExpiryCountdown } from "@/lib/expiry"
 import {
   Dialog,
   DialogContent,
@@ -46,6 +47,8 @@ interface ShiurCollection {
   shiurIds: string[]
   isActive: boolean
   createdAt: string
+  hideAfterDays?: number | null
+  timerStartAt?: string | null
 }
 
 export default function CollectionsPage() {
@@ -53,9 +56,12 @@ export default function CollectionsPage() {
   const [shiurim, setShiurim] = useState<Shiur[]>([])
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingCollection, setEditingCollection] = useState<ShiurCollection | null>(null)
+  const [activatingCollection, setActivatingCollection] = useState<ShiurCollection | null>(null)
+  const [activationDays, setActivationDays] = useState("")
   const [formData, setFormData] = useState({
     name: "",
     description: "",
+    hideAfterDays: "" as string,
   })
   const [selectedShiurim, setSelectedShiurim] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState("")
@@ -99,12 +105,17 @@ export default function CollectionsPage() {
     setLoading(true)
 
     try {
+      const parsedDays = formData.hideAfterDays ? Number(formData.hideAfterDays) : null
+      const timer = computeTimerFields(parsedDays, editingCollection)
+
       const collectionData = {
         name: formData.name,
         description: formData.description,
         shiurIds: selectedShiurim,
         isActive: editingCollection?.isActive || false,
         createdAt: editingCollection?.createdAt || new Date().toISOString(),
+        hideAfterDays: timer.hideAfterDays,
+        timerStartAt: timer.timerStartAt,
       }
 
       if (editingCollection) {
@@ -130,6 +141,7 @@ export default function CollectionsPage() {
     setFormData({
       name: coll.name,
       description: coll.description,
+      hideAfterDays: coll.hideAfterDays ? String(coll.hideAfterDays) : "",
     })
     setSelectedShiurim(coll.shiurIds || [])
     setIsDialogOpen(true)
@@ -147,19 +159,49 @@ export default function CollectionsPage() {
     }
   }
 
-  const handleToggleActive = async (coll: ShiurCollection) => {
+  // Direct deactivation (no prompt). Used when toggling switch from on → off.
+  const handleDeactivate = async (coll: ShiurCollection) => {
     try {
-      // If activating this collection, deactivate all others first
-      if (!coll.isActive) {
-        for (const c of collections) {
-          if (c.isActive && c.id !== coll.id) {
-            await updateDoc(doc(db, "shiurCollections", c.id), { isActive: false })
-          }
+      await updateDoc(doc(db, "shiurCollections", coll.id), { isActive: false })
+      toast({ title: "Collection deactivated" })
+      fetchCollections()
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" })
+    }
+  }
+
+  // Open the activation prompt — admin picks how long the collection stays active.
+  const openActivationDialog = (coll: ShiurCollection) => {
+    setActivatingCollection(coll)
+    setActivationDays(coll.hideAfterDays ? String(coll.hideAfterDays) : "")
+  }
+
+  // Confirm activation: deactivate any other active collection, then set this one
+  // active and (re)start its timer.
+  const confirmActivation = async () => {
+    if (!activatingCollection) return
+    try {
+      // Only one collection can be active on the homepage at a time
+      for (const c of collections) {
+        if (c.isActive && c.id !== activatingCollection.id) {
+          await updateDoc(doc(db, "shiurCollections", c.id), { isActive: false })
         }
       }
-      
-      await updateDoc(doc(db, "shiurCollections", coll.id), { isActive: !coll.isActive })
-      toast({ title: coll.isActive ? "Collection deactivated" : "Collection is now active on homepage" })
+
+      const parsedDays = activationDays ? Number(activationDays) : null
+      const timer = computeTimerFields(parsedDays, null) // Always restart timer on activation
+      await updateDoc(doc(db, "shiurCollections", activatingCollection.id), {
+        isActive: true,
+        hideAfterDays: timer.hideAfterDays,
+        timerStartAt: timer.timerStartAt,
+      })
+
+      toast({
+        title: "Collection is now active on homepage",
+        description: parsedDays && parsedDays > 0 ? `Auto-deactivates in ${parsedDays} day${parsedDays === 1 ? "" : "s"}.` : "No auto-deactivate set.",
+      })
+      setActivatingCollection(null)
+      setActivationDays("")
       fetchCollections()
     } catch (error: any) {
       toast({ title: "Error", description: error.message, variant: "destructive" })
@@ -168,7 +210,7 @@ export default function CollectionsPage() {
 
   const resetForm = () => {
     setEditingCollection(null)
-    setFormData({ name: "", description: "" })
+    setFormData({ name: "", description: "", hideAfterDays: "" })
     setSelectedShiurim([])
     setSearchQuery("")
   }
@@ -222,13 +264,27 @@ export default function CollectionsPage() {
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <CardTitle className="text-navy">{coll.name}</CardTitle>
                       {coll.isActive && (
                         <span className="px-2 py-1 bg-gold/20 text-gold-dark text-xs font-medium rounded">
                           Active on Homepage
                         </span>
                       )}
+                      {(() => {
+                        const countdown = formatExpiryCountdown(coll)
+                        if (!countdown) return null
+                        const isGone = countdown.startsWith("expired")
+                        return (
+                          <span
+                            className={`px-2 py-1 text-xs font-medium rounded ${
+                              isGone ? "bg-red-100 text-red-700" : "bg-navy/10 text-navy/70"
+                            }`}
+                          >
+                            {countdown}
+                          </span>
+                        )
+                      })()}
                     </div>
                     {coll.description && (
                       <p className="text-navy/60 text-sm mt-1">{coll.description}</p>
@@ -242,7 +298,10 @@ export default function CollectionsPage() {
                       <Switch
                         id={`active-${coll.id}`}
                         checked={coll.isActive}
-                        onCheckedChange={() => handleToggleActive(coll)}
+                        onCheckedChange={(checked) => {
+                          if (checked) openActivationDialog(coll)
+                          else handleDeactivate(coll)
+                        }}
                       />
                     </div>
                     <Button variant="outline" size="sm" onClick={() => handleEdit(coll)}>
@@ -285,6 +344,61 @@ export default function CollectionsPage() {
         )}
       </div>
 
+      <Dialog
+        open={activatingCollection !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setActivatingCollection(null)
+            setActivationDays("")
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Activate Collection</DialogTitle>
+            <DialogDescription>
+              "{activatingCollection?.name}" will appear on the home page. Any other active collection will be deactivated.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="activation-days">Auto-deactivate after (days)</Label>
+            <Input
+              id="activation-days"
+              type="number"
+              min={1}
+              placeholder="Leave blank to keep on home page indefinitely"
+              value={activationDays}
+              onChange={(e) => setActivationDays(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  confirmActivation()
+                }
+              }}
+            />
+            <p className="text-xs text-navy/60">
+              Timer starts now. The collection will be hidden from the home page after this many days.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setActivatingCollection(null)
+                setActivationDays("")
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="button" onClick={confirmActivation} className="bg-navy text-cream hover:bg-navy/90">
+              Activate
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -315,6 +429,24 @@ export default function CollectionsPage() {
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="hideAfterDays">Auto-hide after (days, optional)</Label>
+              <Input
+                id="hideAfterDays"
+                type="number"
+                min={1}
+                placeholder="Leave blank to never auto-hide"
+                value={formData.hideAfterDays}
+                onChange={(e) => setFormData({ ...formData, hideAfterDays: e.target.value })}
+              />
+              <p className="text-xs text-navy/50">
+                Collection will be hidden from the site after this many days.
+                {editingCollection?.timerStartAt && formData.hideAfterDays
+                  ? ` Timer started ${new Date(editingCollection.timerStartAt).toLocaleDateString()}.`
+                  : ""}
+              </p>
             </div>
 
             <div className="space-y-3">

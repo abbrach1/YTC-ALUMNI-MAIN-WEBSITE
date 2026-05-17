@@ -18,6 +18,7 @@ import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from "firebase
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage"
 import { db, storage } from "@/lib/firebase"
 import { Plus, Pencil, Trash2, MoveUp, MoveDown, ImageIcon, Upload, Link } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
 
 interface CarouselImage {
@@ -25,6 +26,7 @@ interface CarouselImage {
   url: string
   caption?: string
   order: number
+  enabled?: boolean
 }
 
 export default function CarouselManagement() {
@@ -121,6 +123,7 @@ export default function CarouselManagement() {
         url: imageUrl,
         caption: newImage.caption || "",
         order,
+        enabled: true,
       })
 
       toast({
@@ -214,6 +217,18 @@ export default function CarouselManagement() {
         description: "Failed to delete carousel image",
         variant: "destructive",
       })
+    }
+  }
+
+  const handleToggleEnabled = async (image: CarouselImage) => {
+    const next = image.enabled === false ? true : false
+    try {
+      await updateDoc(doc(db, "carouselImages", image.id), { enabled: next })
+      toast({ title: next ? "Image enabled" : "Image hidden from carousel" })
+      fetchImages()
+    } catch (error) {
+      console.error("Error toggling image:", error)
+      toast({ title: "Error", description: "Failed to update image", variant: "destructive" })
     }
   }
 
@@ -372,21 +387,39 @@ export default function CarouselManagement() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {images.map((image, index) => (
-          <Card key={image.id} className="border-gold/20 bg-white shadow-lg">
+        {images.map((image, index) => {
+          const isEnabled = image.enabled !== false
+          return (
+          <Card key={image.id} className={`border-gold/20 bg-white shadow-lg ${isEnabled ? "" : "opacity-60"}`}>
             <CardHeader className="pb-3">
               <div className="aspect-video relative overflow-hidden rounded-lg bg-navy/5">
                 <img
                   src={image.url || "/placeholder.svg"}
                   alt={image.caption || "Carousel image"}
-                  className="h-full w-full object-cover"
+                  className={`h-full w-full object-cover ${isEnabled ? "" : "grayscale"}`}
                 />
+                {!isEnabled && (
+                  <span className="absolute top-2 right-2 text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 font-medium">
+                    Hidden
+                  </span>
+                )}
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
               <div>
                 <p className="text-sm font-medium text-navy">Order: {index + 1}</p>
                 {image.caption && <p className="text-sm text-navy/70 mt-1 line-clamp-2">{image.caption}</p>}
+              </div>
+
+              <div className="flex items-center justify-between p-2 bg-navy/5 rounded-md">
+                <Label htmlFor={`enabled-${image.id}`} className="text-sm text-navy/70 cursor-pointer">
+                  Show in carousel
+                </Label>
+                <Switch
+                  id={`enabled-${image.id}`}
+                  checked={isEnabled}
+                  onCheckedChange={() => handleToggleEnabled(image)}
+                />
               </div>
 
               <div className="flex gap-2">
@@ -426,7 +459,8 @@ export default function CarouselManagement() {
               </div>
             </CardContent>
           </Card>
-        ))}
+          )
+        })}
 
         {images.length === 0 && (
           <Card className="border-gold/20 bg-white shadow-lg col-span-full">

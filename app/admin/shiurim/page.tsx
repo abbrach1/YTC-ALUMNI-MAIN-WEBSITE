@@ -42,6 +42,7 @@ import {
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage"
 import { storage, db } from "@/lib/firebase"
 import { uploadToB2 } from "@/lib/b2-upload"
+import { isWavFile, maybeConvertWavToMp3 } from "@/lib/audio-convert"
 import { useToast } from "@/hooks/use-toast"
 import { EngagementHoverCard } from "@/components/engagement-hover-card"
 import {
@@ -81,7 +82,7 @@ interface Series {
   shiurCount?: number
 }
 
-type UploadStatus = "idle" | "uploading-audio" | "uploading-pdf" | "saving" | "complete" | "error"
+type UploadStatus = "idle" | "converting-audio" | "uploading-audio" | "uploading-pdf" | "saving" | "complete" | "error"
 
 interface BulkShiurEntry {
   id: string
@@ -503,8 +504,22 @@ export default function AdminShiurimPage() {
       let pdfUrl = editingShiur?.pdfUrl || ""
 
       if (audioSourceType === "upload" && audioFile) {
+        let audioForUpload = audioFile
+        if (isWavFile(audioFile)) {
+          setUploadStatus("converting-audio")
+          const result = await maybeConvertWavToMp3(audioFile, (p) => setUploadProgress(p * 0.3))
+          if (result.converted) {
+            audioForUpload = result.file
+            setAudioFile(result.file)
+          } else if (result.error) {
+            toast({
+              title: "Couldn't convert WAV to MP3",
+              description: `${result.error}. Uploading the original file instead.`,
+            })
+          }
+        }
         setUploadStatus("uploading-audio")
-        audioUrl = await uploadFile(audioFile, "audio", (p) => setUploadProgress(p * 0.6))
+        audioUrl = await uploadFile(audioForUpload, "audio", (p) => setUploadProgress(30 + p * 0.3))
       } else if (audioSourceType === "gdrive" && gdriveUrl) {
         audioUrl = convertGdriveUrl(gdriveUrl)
         setUploadProgress(60)
@@ -704,14 +719,26 @@ export default function AdminShiurimPage() {
       }
 
       try {
-        updateBulkEntry(entry.id, { status: "uploading-audio", progress: 10 })
-
         let audioUrl = ""
         let pdfUrl = ""
 
         if (entry.audioSourceType === "upload" && entry.audioFile) {
-          audioUrl = await uploadFile(entry.audioFile, "audio")
-          updateBulkEntry(entry.id, { progress: 50 })
+          let audioForUpload = entry.audioFile
+          if (isWavFile(entry.audioFile)) {
+            updateBulkEntry(entry.id, { status: "converting-audio", progress: 0 })
+            const result = await maybeConvertWavToMp3(entry.audioFile, (p) => {
+              updateBulkEntry(entry.id, { progress: p * 0.3 })
+            })
+            if (result.converted) {
+              audioForUpload = result.file
+              updateBulkEntry(entry.id, { audioFile: result.file })
+            }
+          }
+          updateBulkEntry(entry.id, { status: "uploading-audio", progress: 30 })
+          audioUrl = await uploadFile(audioForUpload, "audio", (p) => {
+            updateBulkEntry(entry.id, { progress: 30 + p * 0.3 })
+          })
+          updateBulkEntry(entry.id, { progress: 60 })
         } else if (entry.audioSourceType === "gdrive" && entry.gdriveUrl) {
           audioUrl = convertGdriveUrl(entry.gdriveUrl)
           updateBulkEntry(entry.id, { progress: 50 })
@@ -791,6 +818,8 @@ export default function AdminShiurimPage() {
 
   const getStatusLabel = (status: UploadStatus) => {
     switch (status) {
+      case "converting-audio":
+        return "Converting WAV to MP3..."
       case "uploading-audio":
         return "Uploading audio..."
       case "uploading-pdf":

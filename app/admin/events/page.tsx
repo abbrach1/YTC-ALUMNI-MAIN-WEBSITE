@@ -13,6 +13,7 @@ import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where } 
 import { db } from "@/lib/firebase"
 import { uploadToB2 } from "@/lib/b2-upload"
 import { useToast } from "@/hooks/use-toast"
+import { computeTimerFields, formatExpiryCountdown } from "@/lib/expiry"
 import {
   Dialog,
   DialogContent,
@@ -32,6 +33,8 @@ interface Event {
   location: string
   imageUrl?: string
   description?: string
+  hideAfterDays?: number | null
+  timerStartAt?: string | null
 }
 
 interface SimchaSubmission {
@@ -58,6 +61,7 @@ export default function AdminEventsPage() {
     date: "",
     location: "",
     description: "",
+    hideAfterDays: "" as string,
   })
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -102,6 +106,9 @@ export default function AdminEventsPage() {
         })
       }
 
+      const parsedDays = formData.hideAfterDays ? Number(formData.hideAfterDays) : null
+      const timer = computeTimerFields(parsedDays, editingEvent)
+
       const eventData = {
         eventName: formData.eventName,
         personFamily: formData.personFamily,
@@ -110,6 +117,8 @@ export default function AdminEventsPage() {
         location: formData.location,
         description: formData.description,
         imageUrl,
+        hideAfterDays: timer.hideAfterDays,
+        timerStartAt: timer.timerStartAt,
       }
 
       if (editingEvent) {
@@ -177,6 +186,7 @@ export default function AdminEventsPage() {
       date: event.date,
       location: event.location,
       description: event.description || "",
+      hideAfterDays: event.hideAfterDays ? String(event.hideAfterDays) : "",
     })
     setIsDialogOpen(true)
   }
@@ -195,7 +205,7 @@ export default function AdminEventsPage() {
 
   const resetForm = () => {
     setEditingEvent(null)
-    setFormData({ eventName: "", personFamily: "", type: "", date: "", location: "", description: "" })
+    setFormData({ eventName: "", personFamily: "", type: "", date: "", location: "", description: "", hideAfterDays: "" })
     setImageFile(null)
     setUploadProgress(0)
   }
@@ -289,6 +299,24 @@ export default function AdminEventsPage() {
                 />
               </div>
               <div className="space-y-2">
+                <Label htmlFor="hideAfterDays">Auto-hide after (days, optional)</Label>
+                <Input
+                  id="hideAfterDays"
+                  type="number"
+                  min={1}
+                  placeholder="Leave blank to never auto-hide"
+                  value={formData.hideAfterDays}
+                  onChange={(e) => setFormData({ ...formData, hideAfterDays: e.target.value })}
+                />
+                <p className="text-xs text-navy/60">
+                  Event will be hidden from the site after this many days.
+                  {editingEvent?.timerStartAt && formData.hideAfterDays
+                    ? ` Timer started ${new Date(editingEvent.timerStartAt).toLocaleDateString()}.`
+                    : ""}
+                </p>
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="image">Event Image</Label>
                 <Input
                   id="image"
@@ -335,7 +363,23 @@ export default function AdminEventsPage() {
                     className="flex items-start justify-between border-b border-gold/20 pb-4 last:border-0"
                   >
                     <div className="flex-1">
-                      <h3 className="font-semibold text-navy">{event.eventName}</h3>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-semibold text-navy">{event.eventName}</h3>
+                        {(() => {
+                          const countdown = formatExpiryCountdown(event)
+                          if (!countdown) return null
+                          const isGone = countdown.startsWith("expired")
+                          return (
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded ${
+                                isGone ? "bg-red-100 text-red-700" : "bg-navy/10 text-navy/70"
+                              }`}
+                            >
+                              {countdown}
+                            </span>
+                          )
+                        })()}
+                      </div>
                       <p className="text-sm text-navy/70">
                         {event.personFamily} • {event.type}
                       </p>

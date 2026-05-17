@@ -10,6 +10,7 @@ import { Calendar, Play, ExternalLink, ArrowLeft, Download, Loader2 } from "luci
 import Link from "next/link"
 import { doc, getDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { isExpired } from "@/lib/expiry"
 import { useAuth } from "@/lib/auth-context"
 import { trackPlay, trackDownload } from "@/lib/track-engagement"
 import { useToast } from "@/hooks/use-toast"
@@ -54,7 +55,7 @@ export default function CollectionPage() {
 
       try {
         const collectionDoc = await getDoc(doc(db, "shiurCollections", params.id as string))
-        if (collectionDoc.exists()) {
+        if (collectionDoc.exists() && !isExpired(collectionDoc.data())) {
           const collectionData = { id: collectionDoc.id, ...collectionDoc.data() } as ShiurCollection
           setCollection(collectionData)
 

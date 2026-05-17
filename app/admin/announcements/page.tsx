@@ -12,6 +12,7 @@ import { collection, getDocs, doc, setDoc, deleteDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useToast } from "@/hooks/use-toast"
 import { Plus, Pencil, Trash2, Megaphone, PartyPopper } from "lucide-react"
+import { computeTimerFields, formatExpiryCountdown } from "@/lib/expiry"
 
 interface Announcement {
   id: string
@@ -20,6 +21,8 @@ interface Announcement {
   type: "mazel_tov" | "announcement"
   date: string
   enabled: boolean
+  hideAfterDays?: number | null
+  timerStartAt?: string | null
 }
 
 export default function AnnouncementsPage() {
@@ -33,6 +36,7 @@ export default function AnnouncementsPage() {
     type: "announcement" as "mazel_tov" | "announcement",
     date: new Date().toISOString().split("T")[0],
     enabled: true,
+    hideAfterDays: "" as string,
   })
   const { toast } = useToast()
 
@@ -65,6 +69,7 @@ export default function AnnouncementsPage() {
       type: "announcement",
       date: new Date().toISOString().split("T")[0],
       enabled: true,
+      hideAfterDays: "",
     })
     setShowDialog(true)
   }
@@ -77,6 +82,7 @@ export default function AnnouncementsPage() {
       type: item.type,
       date: item.date,
       enabled: item.enabled,
+      hideAfterDays: item.hideAfterDays ? String(item.hideAfterDays) : "",
     })
     setShowDialog(true)
   }
@@ -89,8 +95,13 @@ export default function AnnouncementsPage() {
 
     try {
       const id = editingItem?.id || `announcement_${Date.now()}`
+      const { hideAfterDays: hideAfterDaysStr, ...rest } = formData
+      const parsedDays = hideAfterDaysStr ? Number(hideAfterDaysStr) : null
+      const timer = computeTimerFields(parsedDays, editingItem)
       await setDoc(doc(db, "announcements", id), {
-        ...formData,
+        ...rest,
+        hideAfterDays: timer.hideAfterDays,
+        timerStartAt: timer.timerStartAt,
         updatedAt: new Date().toISOString(),
       })
       toast({ title: editingItem ? "Announcement updated" : "Announcement added" })
@@ -180,6 +191,20 @@ export default function AnnouncementsPage() {
                         {!item.enabled && (
                           <span className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-700">Hidden</span>
                         )}
+                        {(() => {
+                          const countdown = formatExpiryCountdown(item)
+                          if (!countdown) return null
+                          const isGone = countdown.startsWith("expired")
+                          return (
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded ${
+                                isGone ? "bg-red-100 text-red-700" : "bg-navy/10 text-navy/70"
+                              }`}
+                            >
+                              {countdown}
+                            </span>
+                          )
+                        })()}
                       </div>
                       <p className="text-sm text-navy/60 mt-0.5">
                         {new Date(item.date).toLocaleDateString("en-US", {
@@ -304,6 +329,24 @@ export default function AnnouncementsPage() {
                 checked={formData.enabled}
                 onCheckedChange={(checked) => setFormData({ ...formData, enabled: checked })}
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="hideAfterDays">Auto-hide after (days, optional)</Label>
+              <Input
+                id="hideAfterDays"
+                type="number"
+                min={1}
+                placeholder="Leave blank to never auto-hide"
+                value={formData.hideAfterDays}
+                onChange={(e) => setFormData({ ...formData, hideAfterDays: e.target.value })}
+              />
+              <p className="text-xs text-navy/60">
+                Announcement will disappear from the site after this many days.
+                {editingItem?.timerStartAt && formData.hideAfterDays
+                  ? ` Timer started ${new Date(editingItem.timerStartAt).toLocaleDateString()}.`
+                  : ""}
+              </p>
             </div>
           </div>
 

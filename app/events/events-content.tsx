@@ -13,6 +13,7 @@ import { Calendar, MapPin, Clock, Send, Upload, X } from "lucide-react"
 import { collection, getDocs, addDoc, query, orderBy } from "firebase/firestore"
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage"
 import { db, storage } from "@/lib/firebase"
+import { isExpired } from "@/lib/expiry"
 import { useAuth } from "@/lib/auth-context"
 import { useToast } from "@/hooks/use-toast"
 import { getUserFriendlyError } from "@/lib/utils"
@@ -56,7 +57,9 @@ export default function EventsContent() {
 
       querySnapshot.forEach((doc) => {
         const data = doc.data()
-        eventsData.push({ id: doc.id, ...data } as Event)
+        if (!isExpired(data)) {
+          eventsData.push({ id: doc.id, ...data } as Event)
+        }
       })
 
       setEvents(eventsData)

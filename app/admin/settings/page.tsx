@@ -13,13 +13,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { doc, getDoc, setDoc, collection, getDocs, query, orderBy } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useToast } from "@/hooks/use-toast"
+import { ChevronUp, ChevronDown, X, Plus, Search, Sparkles } from "lucide-react"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { computeTimerFields, formatExpiryCountdown } from "@/lib/expiry"
+
+const MAX_FEATURED_SHIURIM = 5
 
 interface Shiur {
   id: string
   title: string
   rebbe: string
   date: string
+  tags?: string[]
+  series?: string
 }
+
+const ALL = "__all__"
 
 export default function SettingsPage() {
   const [formData, setFormData] = useState({
@@ -30,10 +39,20 @@ export default function SettingsPage() {
     zoomLink: "",
     description: "",
   })
-  const [featuredShiur, setFeaturedShiur] = useState({
+  const [featuredShiur, setFeaturedShiur] = useState<{ enabled: boolean; shiurIds: string[] }>({
     enabled: false,
-    shiurId: "",
+    shiurIds: [],
   })
+  const [systemAnnouncement, setSystemAnnouncement] = useState({
+    enabled: false,
+    title: "",
+    message: "",
+    linkUrl: "",
+    linkText: "",
+    hideAfterDays: "" as string,
+    timerStartAt: null as string | null,
+  })
+  const [systemLoading, setSystemLoading] = useState(false)
   const [officePins, setOfficePins] = useState<{ name: string; pin: string }[]>([])
   const [newPinName, setNewPinName] = useState("")
   const [newPin, setNewPin] = useState("")
@@ -41,13 +60,50 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(false)
   const [featuredLoading, setFeaturedLoading] = useState(false)
   const [pinLoading, setPinLoading] = useState(false)
+  const [pickerSearch, setPickerSearch] = useState("")
+  const [pickerRebbe, setPickerRebbe] = useState(ALL)
+  const [pickerTag, setPickerTag] = useState(ALL)
+  const [pickerSeries, setPickerSeries] = useState(ALL)
   const { toast } = useToast()
+
+  const rebbeOptions = Array.from(new Set(shiurim.map((s) => s.rebbe).filter(Boolean))).sort()
+  const tagOptions = Array.from(new Set(shiurim.flatMap((s) => s.tags || []).filter(Boolean))).sort()
+  const seriesOptions = Array.from(new Set(shiurim.map((s) => s.series).filter((x): x is string => !!x))).sort()
+
+  const filteredCandidates = shiurim.filter((s) => {
+    if (featuredShiur.shiurIds.includes(s.id)) return false
+    if (pickerRebbe !== ALL && s.rebbe !== pickerRebbe) return false
+    if (pickerTag !== ALL && !(s.tags || []).includes(pickerTag)) return false
+    if (pickerSeries !== ALL && (s.series || "") !== pickerSeries) return false
+    if (pickerSearch.trim()) {
+      const q = pickerSearch.trim().toLowerCase()
+      if (!s.title.toLowerCase().includes(q) && !s.rebbe.toLowerCase().includes(q)) return false
+    }
+    return true
+  })
+
+  const filtersActive =
+    pickerSearch.trim() !== "" || pickerRebbe !== ALL || pickerTag !== ALL || pickerSeries !== ALL
+
+  const clearFilters = () => {
+    setPickerSearch("")
+    setPickerRebbe(ALL)
+    setPickerTag(ALL)
+    setPickerSeries(ALL)
+  }
+
+  const addFeatured = (id: string) => {
+    if (featuredShiur.shiurIds.includes(id)) return
+    if (featuredShiur.shiurIds.length >= MAX_FEATURED_SHIURIM) return
+    setFeaturedShiur({ ...featuredShiur, shiurIds: [...featuredShiur.shiurIds, id] })
+  }
 
   useEffect(() => {
     fetchUpcomingShiur()
     fetchFeaturedShiur()
     fetchShiurim()
     fetchOfficePin()
+    fetchSystemAnnouncement()
   }, [])
 
   const fetchUpcomingShiur = async () => {
@@ -71,10 +127,63 @@ export default function SettingsPage() {
     const docSnap = await getDoc(docRef)
     if (docSnap.exists()) {
       const data = docSnap.data()
+      // Legacy single shiurId migrates to a one-item array
+      const shiurIds: string[] = Array.isArray(data.shiurIds)
+        ? data.shiurIds.filter((id: unknown): id is string => typeof id === "string" && id.length > 0)
+        : data.shiurId
+        ? [data.shiurId]
+        : []
       setFeaturedShiur({
         enabled: data.enabled || false,
-        shiurId: data.shiurId || "",
+        shiurIds,
       })
+    }
+  }
+
+  const fetchSystemAnnouncement = async () => {
+    const docSnap = await getDoc(doc(db, "settings", "systemAnnouncement"))
+    if (docSnap.exists()) {
+      const data = docSnap.data()
+      setSystemAnnouncement({
+        enabled: !!data.enabled,
+        title: data.title || "",
+        message: data.message || "",
+        linkUrl: data.linkUrl || "",
+        linkText: data.linkText || "",
+        hideAfterDays: data.hideAfterDays ? String(data.hideAfterDays) : "",
+        timerStartAt: data.timerStartAt || null,
+      })
+    }
+  }
+
+  const handleSystemAnnouncementSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSystemLoading(true)
+    try {
+      const parsedDays = systemAnnouncement.hideAfterDays ? Number(systemAnnouncement.hideAfterDays) : null
+      const timer = computeTimerFields(parsedDays, {
+        hideAfterDays: systemAnnouncement.hideAfterDays ? Number(systemAnnouncement.hideAfterDays) : null,
+        timerStartAt: systemAnnouncement.timerStartAt,
+      })
+      await setDoc(doc(db, "settings", "systemAnnouncement"), {
+        enabled: systemAnnouncement.enabled,
+        title: systemAnnouncement.title.trim(),
+        message: systemAnnouncement.message.trim(),
+        linkUrl: systemAnnouncement.linkUrl.trim(),
+        linkText: systemAnnouncement.linkText.trim(),
+        hideAfterDays: timer.hideAfterDays,
+        timerStartAt: timer.timerStartAt,
+      })
+      setSystemAnnouncement((s) => ({
+        ...s,
+        timerStartAt: timer.timerStartAt,
+        hideAfterDays: timer.hideAfterDays ? String(timer.hideAfterDays) : "",
+      }))
+      toast({ title: "System announcement saved" })
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" })
+    } finally {
+      setSystemLoading(false)
     }
   }
 
@@ -93,7 +202,14 @@ export default function SettingsPage() {
     const shiurimData: Shiur[] = []
     querySnapshot.forEach((doc) => {
       const data = doc.data()
-      shiurimData.push({ id: doc.id, title: data.title, rebbe: data.rebbe, date: data.date })
+      shiurimData.push({
+        id: doc.id,
+        title: data.title,
+        rebbe: data.rebbe,
+        date: data.date,
+        tags: Array.isArray(data.tags) ? data.tags : [],
+        series: data.series || undefined,
+      })
     })
     setShiurim(shiurimData)
   }
@@ -279,15 +395,15 @@ export default function SettingsPage() {
 
       <Card className="border-gold/20 bg-white shadow-lg">
         <CardHeader>
-          <CardTitle className="text-navy">Featured Shiur (Home Page)</CardTitle>
+          <CardTitle className="text-navy">Featured Shiurim (Home Page)</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleFeaturedSubmit} className="space-y-6">
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
-                <Label htmlFor="featured-enabled">Enable Featured Shiur</Label>
+                <Label htmlFor="featured-enabled">Enable Featured Shiurim</Label>
                 <p className="text-sm text-muted-foreground">
-                  Display a featured shiur prominently on the home page
+                  Pick up to {MAX_FEATURED_SHIURIM} shiurim to display prominently on the home page
                 </p>
               </div>
               <Switch
@@ -298,28 +414,321 @@ export default function SettingsPage() {
             </div>
 
             {featuredShiur.enabled && (
-              <div className="space-y-2">
-                <Label htmlFor="featured-shiur">Select Shiur</Label>
-                <Select
-                  value={featuredShiur.shiurId}
-                  onValueChange={(value) => setFeaturedShiur({ ...featuredShiur, shiurId: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a shiur to feature" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {shiurim.map((shiur) => (
-                      <SelectItem key={shiur.id} value={shiur.id}>
-                        {shiur.title} - {shiur.rebbe} ({new Date(shiur.date).toLocaleDateString()})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label>Featured Shiurim (in display order)</Label>
+                  <span className="text-xs text-navy/50">
+                    {featuredShiur.shiurIds.length} / {MAX_FEATURED_SHIURIM}
+                  </span>
+                </div>
+
+                {featuredShiur.shiurIds.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No shiurim selected. Pick one below to feature it on the home page.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {featuredShiur.shiurIds.map((id, idx) => {
+                      const shiur = shiurim.find((s) => s.id === id)
+                      const isFirst = idx === 0
+                      const isLast = idx === featuredShiur.shiurIds.length - 1
+                      return (
+                        <div
+                          key={id}
+                          className="flex items-center justify-between p-3 bg-cream/50 rounded-lg border border-navy/10"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-navy truncate">
+                              {idx + 1}. {shiur ? shiur.title : "(shiur no longer exists)"}
+                            </p>
+                            {shiur && (
+                              <p className="text-xs text-navy/60 truncate">
+                                {shiur.rebbe} · {new Date(shiur.date).toLocaleDateString()}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 ml-2">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              disabled={isFirst}
+                              onClick={() => {
+                                const next = [...featuredShiur.shiurIds]
+                                ;[next[idx - 1], next[idx]] = [next[idx], next[idx - 1]]
+                                setFeaturedShiur({ ...featuredShiur, shiurIds: next })
+                              }}
+                              aria-label="Move up"
+                            >
+                              <ChevronUp className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              disabled={isLast}
+                              onClick={() => {
+                                const next = [...featuredShiur.shiurIds]
+                                ;[next[idx], next[idx + 1]] = [next[idx + 1], next[idx]]
+                                setFeaturedShiur({ ...featuredShiur, shiurIds: next })
+                              }}
+                              aria-label="Move down"
+                            >
+                              <ChevronDown className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setFeaturedShiur({
+                                  ...featuredShiur,
+                                  shiurIds: featuredShiur.shiurIds.filter((x) => x !== id),
+                                })
+                              }}
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                              aria-label="Remove"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {featuredShiur.shiurIds.length < MAX_FEATURED_SHIURIM ? (
+                  <div className="space-y-3 pt-3 border-t border-navy/10">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-sm">Add more shiurim</Label>
+                      {filtersActive && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={clearFilters}
+                          className="h-7 text-xs"
+                        >
+                          Clear filters
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-navy/40 pointer-events-none" />
+                      <Input
+                        placeholder="Search by title or rebbe..."
+                        value={pickerSearch}
+                        onChange={(e) => setPickerSearch(e.target.value)}
+                        className="pl-9"
+                      />
+                    </div>
+
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <Select value={pickerRebbe} onValueChange={setPickerRebbe}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Rebbe" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ALL}>All rebbeim</SelectItem>
+                          {rebbeOptions.map((r) => (
+                            <SelectItem key={r} value={r}>{r}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={pickerTag} onValueChange={setPickerTag}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Tag" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ALL}>All tags</SelectItem>
+                          {tagOptions.map((t) => (
+                            <SelectItem key={t} value={t}>{t}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={pickerSeries} onValueChange={setPickerSeries}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Series" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ALL}>All series</SelectItem>
+                          {seriesOptions.map((sr) => (
+                            <SelectItem key={sr} value={sr}>{sr}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <ScrollArea className="h-64 rounded-md border border-navy/10 bg-cream/30">
+                      {filteredCandidates.length === 0 ? (
+                        <div className="p-6 text-center text-sm text-navy/50">
+                          {filtersActive
+                            ? "No shiurim match these filters."
+                            : "No more shiurim available to add."}
+                        </div>
+                      ) : (
+                        <ul className="divide-y divide-navy/5">
+                          {filteredCandidates.map((s) => (
+                            <li
+                              key={s.id}
+                              className="flex items-center justify-between p-3 hover:bg-cream/60"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="font-medium text-navy truncate">{s.title}</p>
+                                <p className="text-xs text-navy/60 truncate">
+                                  {s.rebbe}
+                                  {s.date && ` · ${new Date(s.date).toLocaleDateString()}`}
+                                  {s.series && ` · ${s.series}`}
+                                </p>
+                                {s.tags && s.tags.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {s.tags.map((t) => (
+                                      <span
+                                        key={t}
+                                        className="text-[10px] px-1.5 py-0.5 bg-gold/10 text-navy rounded"
+                                      >
+                                        {t}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => addFeatured(s.id)}
+                                className="ml-2 shrink-0 border-gold/30"
+                                aria-label={`Add ${s.title}`}
+                              >
+                                <Plus className="h-4 w-4" />
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </ScrollArea>
+
+                    <p className="text-xs text-navy/50">
+                      Showing {filteredCandidates.length} of{" "}
+                      {shiurim.length - featuredShiur.shiurIds.length} available shiurim.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-navy/50">
+                    Maximum of {MAX_FEATURED_SHIURIM} featured shiurim reached. Remove one to add another.
+                  </p>
+                )}
               </div>
             )}
 
             <Button type="submit" disabled={featuredLoading} className="w-full bg-navy text-cream hover:bg-navy/90">
-              {featuredLoading ? "Saving..." : "Save Featured Shiur"}
+              {featuredLoading ? "Saving..." : "Save Featured Shiurim"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="border-gold/20 bg-white shadow-lg">
+        <CardHeader>
+          <CardTitle className="text-navy flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-gold" />
+            System Announcement (Home Page Banner)
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Show a prominent banner at the top of the home page (above Mazel Tovs & Announcements).
+            Use for new features, site updates, etc.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSystemAnnouncementSubmit} className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="sysann-enabled">Show banner on home page</Label>
+                <p className="text-sm text-muted-foreground">Toggle visibility without losing content</p>
+              </div>
+              <Switch
+                id="sysann-enabled"
+                checked={systemAnnouncement.enabled}
+                onCheckedChange={(checked) => setSystemAnnouncement({ ...systemAnnouncement, enabled: checked })}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="sysann-title">Title (optional)</Label>
+              <Input
+                id="sysann-title"
+                placeholder="e.g., What's New"
+                value={systemAnnouncement.title}
+                onChange={(e) => setSystemAnnouncement({ ...systemAnnouncement, title: e.target.value })}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="sysann-message">Message *</Label>
+              <Textarea
+                id="sysann-message"
+                rows={3}
+                placeholder="e.g., You can now upload shiurim in bulk — check out the new Upload page."
+                value={systemAnnouncement.message}
+                onChange={(e) => setSystemAnnouncement({ ...systemAnnouncement, message: e.target.value })}
+              />
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="sysann-link">Link URL (optional)</Label>
+                <Input
+                  id="sysann-link"
+                  type="url"
+                  placeholder="https://..."
+                  value={systemAnnouncement.linkUrl}
+                  onChange={(e) => setSystemAnnouncement({ ...systemAnnouncement, linkUrl: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="sysann-link-text">Link Button Text</Label>
+                <Input
+                  id="sysann-link-text"
+                  placeholder="Learn more"
+                  value={systemAnnouncement.linkText}
+                  onChange={(e) => setSystemAnnouncement({ ...systemAnnouncement, linkText: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="sysann-hideAfter">Auto-hide after (days, optional)</Label>
+              <Input
+                id="sysann-hideAfter"
+                type="number"
+                min={1}
+                placeholder="Leave blank to never auto-hide"
+                value={systemAnnouncement.hideAfterDays}
+                onChange={(e) => setSystemAnnouncement({ ...systemAnnouncement, hideAfterDays: e.target.value })}
+              />
+              {(() => {
+                const countdown = formatExpiryCountdown({
+                  hideAfterDays: systemAnnouncement.hideAfterDays ? Number(systemAnnouncement.hideAfterDays) : null,
+                  timerStartAt: systemAnnouncement.timerStartAt,
+                })
+                return countdown ? (
+                  <p className="text-xs text-navy/60">
+                    Banner {countdown}.
+                    {systemAnnouncement.timerStartAt
+                      ? ` Timer started ${new Date(systemAnnouncement.timerStartAt).toLocaleDateString()}.`
+                      : ""}
+                  </p>
+                ) : (
+                  <p className="text-xs text-navy/50">Banner stays until you turn it off or clear it.</p>
+                )
+              })()}
+            </div>
+
+            <Button type="submit" disabled={systemLoading} className="w-full bg-navy text-cream hover:bg-navy/90">
+              {systemLoading ? "Saving..." : "Save System Announcement"}
             </Button>
           </form>
         </CardContent>

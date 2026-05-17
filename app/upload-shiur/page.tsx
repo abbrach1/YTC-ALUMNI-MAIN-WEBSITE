@@ -19,9 +19,10 @@ import { uploadToB2 } from "@/lib/b2-upload"
 import { useToast } from "@/hooks/use-toast"
 import { getUserFriendlyError, checkFirestoreReachable } from "@/lib/utils"
 import { FileDropzone } from "@/components/file-dropzone"
-import { Loader2, CheckCircle, Plus, X, UploadIcon, Trash2, ListPlus } from "lucide-react"
+import { isWavFile, maybeConvertWavToMp3 } from "@/lib/audio-convert"
+import { Loader2, CheckCircle, Plus, X, UploadIcon, Trash2, ListPlus, User } from "lucide-react"
 
-type UploadStatus = "idle" | "uploading-audio" | "uploading-pdf" | "saving" | "complete" | "error"
+type UploadStatus = "idle" | "converting-audio" | "uploading-audio" | "uploading-pdf" | "saving" | "complete" | "error"
 
 interface BulkShiurEntry {
   id: string
@@ -36,7 +37,6 @@ interface BulkShiurEntry {
   error?: string
   progress: number
   series: string
-  uploaderName: string
 }
 
 export default function UploadShiurPage() {
@@ -51,7 +51,6 @@ export default function UploadShiurPage() {
     date: "",
     description: "",
     series: "",
-    uploaderName: "",
   })
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [audioFile, setAudioFile] = useState<File | null>(null)
@@ -61,7 +60,7 @@ export default function UploadShiurPage() {
   const [uploadProgress, setUploadProgress] = useState(0)
 
   // Background (parallel) upload state for audio + pdf
-  const [audioBgStatus, setAudioBgStatus] = useState<"idle" | "uploading" | "complete" | "error">("idle")
+  const [audioBgStatus, setAudioBgStatus] = useState<"idle" | "converting" | "uploading" | "complete" | "error">("idle")
   const [audioBgProgress, setAudioBgProgress] = useState(0)
   const [audioBgUrl, setAudioBgUrl] = useState<string | null>(null)
   const [audioBgError, setAudioBgError] = useState<string | null>(null)
@@ -209,8 +208,29 @@ export default function UploadShiurPage() {
       return
     }
 
-    setAudioBgStatus("uploading")
-    const promise = uploadFile(file, "audio", (p) => setAudioBgProgress(p))
+    const runConvertAndUpload = async (): Promise<string> => {
+      let toUpload = file
+      if (isWavFile(file)) {
+        setAudioBgStatus("converting")
+        setAudioBgProgress(0)
+        const result = await maybeConvertWavToMp3(file, (p) => setAudioBgProgress(p))
+        if (result.converted) {
+          toUpload = result.file
+          // Update the visible filename to the new .mp3
+          setAudioFile(result.file)
+        } else if (result.error) {
+          toast({
+            title: "Couldn't convert WAV to MP3",
+            description: `${result.error}. Uploading the original file instead.`,
+          })
+        }
+      }
+      setAudioBgStatus("uploading")
+      setAudioBgProgress(0)
+      return uploadToB2(toUpload, "shiurim/audio", (p) => setAudioBgProgress(p))
+    }
+
+    const promise = runConvertAndUpload()
       .then((url) => {
         setAudioBgUrl(url)
         setAudioBgStatus("complete")
@@ -265,6 +285,8 @@ export default function UploadShiurPage() {
 
   const getStatusLabel = (status: UploadStatus) => {
     switch (status) {
+      case "converting-audio":
+        return "Converting WAV to MP3..."
       case "uploading-audio":
         return "Uploading audio..."
       case "uploading-pdf":
@@ -280,11 +302,6 @@ export default function UploadShiurPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    if (!formData.uploaderName.trim()) {
-      toast({ title: "Please enter your name", variant: "destructive" })
-      return
-    }
 
     // Pre-flight check: detect ad blockers / privacy extensions before starting a long upload
     const reachable = await checkFirestoreReachable()
@@ -381,7 +398,7 @@ export default function UploadShiurPage() {
         audioUrl,
         pdfUrl,
         uploadedBy: user?.email || "unknown",
-        uploaderName: formData.uploaderName.trim(),
+        uploaderName: user?.email || "unknown",
         uploadedAt: new Date().toISOString(),
       }
 
@@ -431,7 +448,6 @@ export default function UploadShiurPage() {
     status: "idle",
     progress: 0,
     series: "",
-    uploaderName: "",
   })
 
   const addBulkEntry = () => {
@@ -454,13 +470,6 @@ export default function UploadShiurPage() {
   }
 
   const handleBulkUpload = async () => {
-    // Validate all entries have uploader name
-    const missingNames = bulkEntries.some(e => !e.uploaderName.trim())
-    if (missingNames) {
-      toast({ title: "Please enter your name for all entries", variant: "destructive" })
-      return
-    }
-
     // Pre-flight check: detect ad blockers before starting bulk upload
     const reachable = await checkFirestoreReachable()
     if (!reachable) {
@@ -483,15 +492,28 @@ export default function UploadShiurPage() {
       }
 
       try {
-        updateBulkEntry(entry.id, { status: "uploading-audio", progress: 10 })
-
         let audioUrl = ""
         let pdfUrl = ""
 
         if (entry.audioFile) {
-          audioUrl = await uploadFile(entry.audioFile, "audio", (p) => {
-            updateBulkEntry(entry.id, { progress: 10 + p * 0.5 })
+          let audioForUpload = entry.audioFile
+          if (isWavFile(entry.audioFile)) {
+            updateBulkEntry(entry.id, { status: "converting-audio", progress: 0 })
+            const result = await maybeConvertWavToMp3(entry.audioFile, (p) => {
+              updateBulkEntry(entry.id, { progress: p * 0.3 })
+            })
+            if (result.converted) {
+              audioForUpload = result.file
+              updateBulkEntry(entry.id, { audioFile: result.file })
+            }
+          }
+
+          updateBulkEntry(entry.id, { status: "uploading-audio", progress: 30 })
+          audioUrl = await uploadFile(audioForUpload, "audio", (p) => {
+            updateBulkEntry(entry.id, { progress: 30 + p * 0.3 })
           })
+        } else {
+          updateBulkEntry(entry.id, { status: "uploading-audio", progress: 10 })
         }
         updateBulkEntry(entry.id, { progress: 60 })
 
@@ -514,7 +536,7 @@ export default function UploadShiurPage() {
           audioUrl,
           pdfUrl,
           uploadedBy: user?.email || "unknown",
-          uploaderName: entry.uploaderName.trim(),
+          uploaderName: user?.email || "unknown",
           uploadedAt: new Date().toISOString(),
         })
 
@@ -552,7 +574,7 @@ export default function UploadShiurPage() {
     }
   }
 
-  const applyToAllBulk = (field: "rebbe" | "series" | "uploaderName", value: string) => {
+  const applyToAllBulk = (field: "rebbe" | "series", value: string) => {
     setBulkEntries(bulkEntries.map(e => ({ ...e, [field]: value })))
     toast({ title: `Applied to all entries` })
   }
@@ -580,6 +602,14 @@ export default function UploadShiurPage() {
             <h1 className="font-serif text-4xl font-bold text-navy">Upload Shiurim</h1>
           </div>
           <p className="text-navy/70">Share your shiurim with the alumni network</p>
+          {user?.email && (
+            <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-gold/10 border border-gold/30 text-sm text-navy">
+              <User className="h-3.5 w-3.5 text-gold-dark" />
+              <span>
+                Uploading as <span className="font-medium">{user.displayName || user.email}</span>
+              </span>
+            </div>
+          )}
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -615,20 +645,23 @@ export default function UploadShiurPage() {
                     <FileDropzone
                       accept="audio/*"
                       label="Drop audio file here, or click to browse"
-                      hint="MP3, WAV, M4A, etc."
+                      hint="MP3, WAV, M4A, etc. (WAV files auto-convert to MP3)"
                       selectedFile={audioFile}
-                      disabled={audioBgStatus === "uploading" || uploading}
+                      disabled={audioBgStatus === "uploading" || audioBgStatus === "converting" || uploading}
                       onFilesSelected={(files) => handleAudioFileChange(files[0] || null)}
                     />
                     {audioFile && (
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-navy/70 truncate flex-1 mr-2 flex items-center gap-1.5">
-                            {audioBgStatus === "uploading" && <Loader2 className="h-3 w-3 animate-spin text-navy/60 flex-shrink-0" />}
+                            {(audioBgStatus === "uploading" || audioBgStatus === "converting") && <Loader2 className="h-3 w-3 animate-spin text-navy/60 flex-shrink-0" />}
                             {audioBgStatus === "complete" && <CheckCircle className="h-3 w-3 text-green-600 flex-shrink-0" />}
                             <span className="truncate">{audioFile.name}</span>
                           </span>
                           <span className="font-medium flex-shrink-0">
+                            {audioBgStatus === "converting" && (
+                              <span className="text-navy">Converting WAV {Math.round(audioBgProgress)}%</span>
+                            )}
                             {audioBgStatus === "uploading" && (
                               <span className="text-navy">{Math.round(audioBgProgress)}%</span>
                             )}
@@ -640,7 +673,7 @@ export default function UploadShiurPage() {
                             )}
                           </span>
                         </div>
-                        {audioBgStatus === "uploading" && (
+                        {(audioBgStatus === "uploading" || audioBgStatus === "converting") && (
                           <Progress value={audioBgProgress} className="h-1.5" />
                         )}
                         {audioBgStatus === "error" && (
@@ -706,22 +739,6 @@ export default function UploadShiurPage() {
                 <div className="pt-2">
                   <h3 className="text-navy font-bold text-lg">Step 2 - Shiur Details</h3>
                   <p className="text-xs text-navy/60 mt-0.5">Fill these in while your file uploads.</p>
-                </div>
-
-                {/* Uploader Name */}
-                <div className="space-y-2 p-4 bg-gold/5 rounded-lg border border-gold/20">
-                  <Label htmlFor="uploaderName" className="text-navy font-semibold">
-                    Your Name *
-                  </Label>
-                  <Input
-                    id="uploaderName"
-                    required
-                    value={formData.uploaderName}
-                    onChange={(e) => setFormData({ ...formData, uploaderName: e.target.value })}
-                    placeholder="Enter your name (visible to admins)"
-                    className="border-gold/30"
-                  />
-                  <p className="text-xs text-navy/50">This helps admins know who uploaded each shiur</p>
                 </div>
 
                 <div className="space-y-2">
@@ -953,14 +970,18 @@ export default function UploadShiurPage() {
                   {uploading ? (
                     <>
                       <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                      {audioBgStatus === "uploading"
+                      {audioBgStatus === "converting"
+                        ? `Converting WAV (${Math.round(audioBgProgress)}%)...`
+                        : audioBgStatus === "uploading"
                         ? `Waiting for audio (${Math.round(audioBgProgress)}%)...`
                         : getStatusLabel(uploadStatus)}
                     </>
                   ) : (
                     <>
                       <UploadIcon className="mr-2 h-5 w-5" />
-                      {audioBgStatus === "uploading"
+                      {audioBgStatus === "converting"
+                        ? `Submit (converting WAV - ${Math.round(audioBgProgress)}%)`
+                        : audioBgStatus === "uploading"
                         ? `Submit (audio still uploading - ${Math.round(audioBgProgress)}%)`
                         : "Upload Shiur"}
                     </>
@@ -980,29 +1001,7 @@ export default function UploadShiurPage() {
                     <CardTitle className="text-lg text-navy">Quick Apply to All</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid gap-4 md:grid-cols-3">
-                      <div className="space-y-2">
-                        <Label className="text-sm text-navy/70">Uploader Name</Label>
-                        <div className="flex gap-2">
-                          <Input
-                            placeholder="Your name"
-                            id="bulkUploaderName"
-                            className="border-gold/30"
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              const input = document.getElementById("bulkUploaderName") as HTMLInputElement
-                              if (input.value) applyToAllBulk("uploaderName", input.value)
-                            }}
-                            className="border-gold/30"
-                          >
-                            Apply
-                          </Button>
-                        </div>
-                      </div>
+                    <div className="grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
                         <Label className="text-sm text-navy/70">Rebbe</Label>
                         <div className="flex gap-2">
@@ -1105,18 +1104,6 @@ export default function UploadShiurPage() {
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        {/* Uploader Name */}
-                        <div className="space-y-2">
-                          <Label className="text-navy font-semibold text-sm">Your Name *</Label>
-                          <Input
-                            value={entry.uploaderName}
-                            onChange={(e) => updateBulkEntry(entry.id, { uploaderName: e.target.value })}
-                            placeholder="Enter your name"
-                            className="border-gold/30"
-                            disabled={bulkUploading}
-                          />
-                        </div>
-
                         <div className="grid gap-4 md:grid-cols-2">
                           <div className="space-y-2">
                             <Label className="text-navy font-semibold text-sm">Title *</Label>
