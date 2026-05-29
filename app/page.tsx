@@ -6,6 +6,7 @@ import { useEffect, useState } from "react"
 import Image from "next/image"
 import { Navbar } from "@/components/navbar"
 import { AuthGuard } from "@/components/auth-guard"
+import { CampaignSignup } from "@/components/campaign-signup"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Calendar, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, ExternalLink, PartyPopper, Megaphone, Play, Download, X, Loader2, FolderOpen } from "lucide-react"
@@ -462,6 +463,9 @@ export default function HomePage() {
         </section>
 
         <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8 space-y-24">
+          {/* Fundraiser campaign sign-up — renders only when enabled in admin */}
+          <CampaignSignup />
+
           {systemAnnouncement && (
             <section>
               <Card className="border-gold/30 bg-white shadow-md hover:shadow-xl transition-all duration-300 group overflow-hidden">
