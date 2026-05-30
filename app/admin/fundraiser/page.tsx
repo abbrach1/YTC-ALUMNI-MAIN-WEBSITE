@@ -268,6 +268,17 @@ export default function AdminFundraiserPage() {
                 onChange={(e) => setSettings({ ...settings, deadline: e.target.value || null })}
               />
             </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="defaultGoal" className="text-sm font-medium text-navy">
+                Default Goal
+              </Label>
+              <Input
+                id="defaultGoal"
+                value={settings.defaultGoal}
+                onChange={(e) => setSettings({ ...settings, defaultGoal: e.target.value })}
+                placeholder="$1,800"
+              />
+            </div>
           </div>
 
           <div className="space-y-1.5">
@@ -280,6 +291,20 @@ export default function AdminFundraiserPage() {
               value={settings.description}
               onChange={(e) => setSettings({ ...settings, description: e.target.value })}
               placeholder="Short blurb shown under the headline on the home page."
+              className="resize-none"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="defaultMessage" className="text-sm font-medium text-navy">
+              Default Personal Message <span className="font-normal text-navy/40">(pre-fills the form)</span>
+            </Label>
+            <Textarea
+              id="defaultMessage"
+              rows={3}
+              value={settings.defaultMessage}
+              onChange={(e) => setSettings({ ...settings, defaultMessage: e.target.value })}
+              placeholder="Optional message pre-filled in each alumnus's form — they can edit it."
               className="resize-none"
             />
           </div>

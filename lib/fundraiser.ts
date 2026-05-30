@@ -26,6 +26,10 @@ export interface FundraiserSettings {
   description: string
   /** Optional ISO date (yyyy-mm-dd) the campaign ends — shown on the CTA. */
   deadline: string | null
+  /** Pre-filled fundraising goal in the sign-up form (the alumnus can edit it). */
+  defaultGoal: string
+  /** Pre-filled personal message in the sign-up form (the alumnus can edit it). */
+  defaultMessage: string
   /** ISO timestamp of the last admin edit. */
   updatedAt?: string
 }

@@ -57,7 +57,7 @@ export function CampaignSignup() {
     email: "",
     phone: "",
     pageTitle: "",
-    goalAmount: "$1,800",
+    goalAmount: "",
     message: "",
   })
 
@@ -83,6 +83,13 @@ export function CampaignSignup() {
     if (!settings || !user) return
     let cancelled = false
     const prefill = async () => {
+      // Pre-fill goal + message from the admin-configured campaign defaults.
+      setFormData((prev) => ({
+        ...prev,
+        goalAmount: prev.goalAmount || settings.defaultGoal || "$1,800",
+        message: prev.message || settings.defaultMessage || "",
+      }))
+
       let name = user.displayName || ""
       let phone = ""
       try {
