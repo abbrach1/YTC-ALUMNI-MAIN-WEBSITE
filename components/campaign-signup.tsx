@@ -205,12 +205,17 @@ export function CampaignSignup() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    // If they've already created a page, confirm before creating another.
+    void doSubmit()
+  }
+
+  // Tapping the home-page CTA: if they've already created a page, confirm before
+  // opening the form again; otherwise open it straight away.
+  const handleCreateClick = () => {
     if (alreadySubmitted) {
       setShowResubmitConfirm(true)
-      return
+    } else {
+      setOpen(true)
     }
-    void doSubmit()
   }
 
   const handleOpenChange = (next: boolean) => {
@@ -238,13 +243,25 @@ export function CampaignSignup() {
                 <p className="mt-4 text-sm text-cream/60">Campaign ends {deadlineLabel}</p>
               )}
             </div>
-            <div className="flex-shrink-0">
+            <div className="flex flex-shrink-0 flex-col items-stretch gap-3">
               <Button
-                onClick={() => setOpen(true)}
+                onClick={handleCreateClick}
                 className="h-12 bg-gold px-8 text-base font-semibold text-navy hover:bg-gold-light"
               >
                 Create Your Page
               </Button>
+              {settings.showLinkOnHome && settings.campaignUrl && (
+                <Button
+                  asChild
+                  variant="outline"
+                  className="h-12 border-cream/30 bg-transparent px-8 text-base font-semibold text-cream hover:bg-cream/10 hover:text-cream"
+                >
+                  <a href={settings.campaignUrl} target="_blank" rel="noopener noreferrer">
+                    Visit the Campaign
+                    <ExternalLink className="ml-2 h-4 w-4" />
+                  </a>
+                </Button>
+              )}
             </div>
           </div>
         </CardContent>
@@ -261,7 +278,7 @@ export function CampaignSignup() {
                   You&apos;ll get an email with all the info when the campaign goes live.
                 </DialogDescription>
               </DialogHeader>
-              {settings.campaignUrl && (
+              {settings.showLinkOnSubmit && settings.campaignUrl && (
                 <Button asChild className="bg-navy text-cream hover:bg-navy/90">
                   <a href={settings.campaignUrl} target="_blank" rel="noopener noreferrer">
                     Visit the Campaign
@@ -397,7 +414,7 @@ export function CampaignSignup() {
             <AlertDialogAction
               onClick={() => {
                 setShowResubmitConfirm(false)
-                void doSubmit()
+                setOpen(true)
               }}
               className="bg-navy text-cream hover:bg-navy/90"
             >

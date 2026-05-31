@@ -309,6 +309,37 @@ export default function AdminFundraiserPage() {
             />
           </div>
 
+          {/* Controls where alumni see the CharityExtra Campaign Link above. */}
+          <div className="space-y-3 rounded-lg border border-navy/10 p-4">
+            <div>
+              <p className="text-sm font-medium text-navy">&quot;Visit the Campaign&quot; Link</p>
+              <p className="text-xs text-navy/50">
+                Choose where alumni see the CharityExtra Campaign Link above. Turn these on once the
+                campaign page is live.
+              </p>
+            </div>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="showLinkOnHome" className="text-sm font-normal text-navy">
+                Show link on the home page
+              </Label>
+              <Switch
+                id="showLinkOnHome"
+                checked={settings.showLinkOnHome}
+                onCheckedChange={(v) => setSettings({ ...settings, showLinkOnHome: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="showLinkOnSubmit" className="text-sm font-normal text-navy">
+                Show link after someone submits
+              </Label>
+              <Switch
+                id="showLinkOnSubmit"
+                checked={settings.showLinkOnSubmit}
+                onCheckedChange={(v) => setSettings({ ...settings, showLinkOnSubmit: v })}
+              />
+            </div>
+          </div>
+
           <div className="flex justify-end">
             <Button
               onClick={handleSaveSettings}

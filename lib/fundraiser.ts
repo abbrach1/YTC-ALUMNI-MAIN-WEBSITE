@@ -30,6 +30,10 @@ export interface FundraiserSettings {
   defaultGoal: string
   /** Pre-filled personal message in the sign-up form (the alumnus can edit it). */
   defaultMessage: string
+  /** Show the "Visit the Campaign" link on the home-page CTA (turn on once the page is live). */
+  showLinkOnHome: boolean
+  /** Show the "Visit the Campaign" link on the success screen after an alumnus submits. */
+  showLinkOnSubmit: boolean
   /** ISO timestamp of the last admin edit. */
   updatedAt?: string
 }
@@ -61,6 +65,10 @@ export const FUNDRAISER_DEFAULTS: FundraiserSettings = {
   description:
     "Create your own fundraising page and help us reach our goal. Fill out the form and our office will set up your personal campaign page on CharityExtra.",
   deadline: null,
+  defaultGoal: "",
+  defaultMessage: "",
+  showLinkOnHome: false,
+  showLinkOnSubmit: true,
 }
 
 export const CAMPAIGN_STATUS_LABELS: Record<CampaignSignupStatus, string> = {
