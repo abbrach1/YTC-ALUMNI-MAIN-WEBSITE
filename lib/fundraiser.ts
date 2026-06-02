@@ -20,6 +20,16 @@ export interface FundraiserSettings {
   campaignName: string
   /** Link to the live CharityExtra campaign (shown to alumni after they submit). */
   campaignUrl: string
+  /**
+   * Source link for the live progress stats. Accepts either the public campaign
+   * link (`charityextra.com/{slug}`) or the API link
+   * (`charityextra.com/api/{slug}/details`). Falls back to `campaignUrl` when blank.
+   */
+  statusUrl: string
+  /** Master on/off switch for the live progress bar (amount raised / goal / donors). */
+  showCampaignStatus: boolean
+  /** Show a live "time left" countdown to the deadline. */
+  showCountdown: boolean
   /** Headline shown on the home-page call-to-action. */
   headline: string
   /** Supporting copy shown on the home-page call-to-action. */
@@ -61,6 +71,9 @@ export const FUNDRAISER_DEFAULTS: FundraiserSettings = {
   enabled: false,
   campaignName: "",
   campaignUrl: "",
+  statusUrl: "",
+  showCampaignStatus: true,
+  showCountdown: true,
   headline: "Be Part of Our Campaign",
   description:
     "Create your own fundraising page and help us reach our goal. Fill out the form and our office will set up your personal campaign page on CharityExtra.",
@@ -79,3 +92,57 @@ export const CAMPAIGN_STATUS_LABELS: Record<CampaignSignupStatus, string> = {
 }
 
 export const CAMPAIGN_STATUSES: CampaignSignupStatus[] = ["new", "contacted", "live", "archived"]
+
+/**
+ * Live campaign stats from the CharityExtra public API
+ * (`https://www.charityextra.com/api/{slug}/details`). Fetched server-side via
+ * `/api/campaign-status` to dodge CORS, normalized to the fields below.
+ */
+export interface CampaignStatus {
+  /** Fundraising target. */
+  goal: number
+  /** Stretch / bonus target (matched-funds ceiling), if any. */
+  goalBonus: number
+  /** Total raised so far. */
+  amount: number
+  /** Number of donations. */
+  donations: number
+  /** Matching multiplier, e.g. 2 means donations are doubled (1 = no match). */
+  multiplied: number
+  /** ISO 4217 currency code, e.g. "GBP", "USD". */
+  currency: string
+  /** Display symbol, e.g. "£", "$". */
+  currencySymbol: string
+  /** Campaign is accepting donations. */
+  open: boolean
+  /** Campaign is currently live (within its run window). */
+  isLive: boolean
+  /** Unix (seconds) start time. */
+  starts: number
+  /** CharityExtra campaign slug. */
+  name: string
+  /** Charity display name. */
+  knownAs: string
+  /** Raised as a % of goal, clamped 0–100 (computed by our API route). */
+  percent: number
+}
+
+/**
+ * CharityExtra campaign pages live at `charityextra.com/{slug}` and their API at
+ * `charityextra.com/api/{slug}/details`. Pull the slug out of either form so the
+ * admin only ever has to paste the public campaign link.
+ */
+export function deriveCampaignSlug(campaignUrl: string): string | null {
+  if (!campaignUrl) return null
+  try {
+    const u = new URL(campaignUrl.trim())
+    const parts = u.pathname.split("/").filter(Boolean)
+    if (parts.length === 0) return null
+    // API form: /api/{slug}/details
+    if (parts[0] === "api" && parts.length >= 2) return parts[1]
+    // Public form: /{slug}
+    return parts[0]
+  } catch {
+    return null
+  }
+}

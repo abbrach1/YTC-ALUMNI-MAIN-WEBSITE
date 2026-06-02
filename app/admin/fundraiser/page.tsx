@@ -29,6 +29,8 @@ import {
 import { db } from "@/lib/firebase"
 import { useToast } from "@/hooks/use-toast"
 import { exportRowsToXlsx } from "@/lib/export-xlsx"
+import { CampaignProgress } from "@/components/campaign-progress"
+import { CampaignCountdown } from "@/components/campaign-countdown"
 import {
   FUNDRAISER_SETTINGS_DOC,
   FUNDRAISER_SIGNUPS_COLLECTION,
@@ -51,6 +53,7 @@ import {
   Clock,
   Sparkles,
   Loader2,
+  TrendingUp,
 } from "lucide-react"
 
 export default function AdminFundraiserPage() {
@@ -204,6 +207,27 @@ export default function AdminFundraiserPage() {
         </p>
       </div>
 
+      {/* Live status pulled from CharityExtra — only when shown and a link is set. */}
+      {settings.showCampaignStatus && (settings.statusUrl || settings.campaignUrl) && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-navy" />
+                <CardTitle>Live Campaign Status</CardTitle>
+              </div>
+              {settings.showCountdown && settings.deadline && (
+                <CampaignCountdown deadline={settings.deadline} variant="light" />
+              )}
+            </div>
+            <CardDescription>Real-time totals from the CharityExtra campaign page.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CampaignProgress campaignUrl={settings.statusUrl || settings.campaignUrl} variant="light" />
+          </CardContent>
+        </Card>
+      )}
+
       {/* Campaign settings + on/off toggle */}
       <Card>
         <CardHeader>
@@ -245,6 +269,22 @@ export default function AdminFundraiserPage() {
                 onChange={(e) => setSettings({ ...settings, campaignUrl: e.target.value })}
                 placeholder="https://charityextra.com/..."
               />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="statusUrl" className="text-sm font-medium text-navy">
+                Live Status Link <span className="font-normal text-navy/40">(for the progress bar)</span>
+              </Label>
+              <Input
+                id="statusUrl"
+                value={settings.statusUrl}
+                onChange={(e) => setSettings({ ...settings, statusUrl: e.target.value })}
+                placeholder="https://www.charityextra.com/api/your-campaign/details"
+              />
+              <p className="text-xs text-navy/50">
+                Paste the campaign link or its API link (the{" "}
+                <code className="rounded bg-navy/5 px-1">/api/.../details</code> form). Leave blank to
+                reuse the Campaign Link above.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="headline" className="text-sm font-medium text-navy">
@@ -307,6 +347,36 @@ export default function AdminFundraiserPage() {
               placeholder="Optional message pre-filled in each alumnus's form — they can edit it."
               className="resize-none"
             />
+          </div>
+
+          {/* Controls the live progress bar + countdown shown on the home page and here. */}
+          <div className="space-y-3 rounded-lg border border-navy/10 p-4">
+            <div>
+              <p className="text-sm font-medium text-navy">Live Status Display</p>
+              <p className="text-xs text-navy/50">
+                Show real-time fundraising progress and a countdown to the deadline.
+              </p>
+            </div>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="showCampaignStatus" className="text-sm font-normal text-navy">
+                Show the live progress bar
+              </Label>
+              <Switch
+                id="showCampaignStatus"
+                checked={settings.showCampaignStatus}
+                onCheckedChange={(v) => setSettings({ ...settings, showCampaignStatus: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="showCountdown" className="text-sm font-normal text-navy">
+                Show the &quot;time left&quot; countdown
+              </Label>
+              <Switch
+                id="showCountdown"
+                checked={settings.showCountdown}
+                onCheckedChange={(v) => setSettings({ ...settings, showCountdown: v })}
+              />
+            </div>
           </div>
 
           {/* Controls where alumni see the CharityExtra Campaign Link above. */}

@@ -25,6 +25,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Send, ExternalLink, CheckCircle2 } from "lucide-react"
+import { CampaignProgress } from "@/components/campaign-progress"
+import { CampaignCountdown } from "@/components/campaign-countdown"
 import { doc, getDoc, setDoc, collection, addDoc, getDocs, query, where } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/lib/auth-context"
@@ -240,7 +242,19 @@ export function CampaignSignup() {
                 {settings.description}
               </p>
               {deadlineLabel && (
-                <p className="mt-4 text-sm text-cream/60">Campaign ends {deadlineLabel}</p>
+                <p className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-cream/60">
+                  <span>Campaign ends {deadlineLabel}</span>
+                  {settings.showCountdown && settings.deadline && (
+                    <CampaignCountdown deadline={settings.deadline} variant="dark" />
+                  )}
+                </p>
+              )}
+              {settings.showCampaignStatus && (settings.statusUrl || settings.campaignUrl) && (
+                <CampaignProgress
+                  campaignUrl={settings.statusUrl || settings.campaignUrl}
+                  variant="dark"
+                  className="mt-6 max-w-xl"
+                />
               )}
             </div>
             <div className="flex flex-shrink-0 flex-col items-stretch gap-3">
