@@ -12,17 +12,49 @@ import type React from "react"
 import { useState, useEffect, useRef } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { AuthGuard } from "@/components/auth-guard"
-import { useRouter } from "next/navigation"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, doc, getDoc, setDoc } from "firebase/firestore"
+import {
+  collection,
+  addDoc,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  getDocs,
+  query,
+  orderBy,
+  limit,
+  where,
+} from "firebase/firestore"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { uploadToB2 } from "@/lib/b2-upload"
 import { useToast } from "@/hooks/use-toast"
 import { getUserFriendlyError, checkFirestoreReachable } from "@/lib/utils"
 import { FileDropzone } from "@/components/file-dropzone"
 import { isWavFile, maybeConvertWavToMp3 } from "@/lib/audio-convert"
-import { Loader2, CheckCircle, Plus, X, UploadIcon, Trash2, ListPlus, User } from "lucide-react"
+import { Loader2, CheckCircle, Plus, X, UploadIcon, Trash2, ListPlus, User, Pencil, Lock, Clock } from "lucide-react"
 
 type UploadStatus = "idle" | "converting-audio" | "uploading-audio" | "uploading-pdf" | "saving" | "complete" | "error"
+
+interface RecentShiur {
+  id: string
+  title: string
+  rebbe: string
+  date: string
+  tags: string[]
+  description?: string
+  series?: string
+  uploadedBy?: string
+  uploaderName?: string
+  uploadedAt?: string
+}
 
 interface BulkShiurEntry {
   id: string
@@ -41,7 +73,6 @@ interface BulkShiurEntry {
 
 export default function UploadShiurPage() {
   const { user } = useAuth()
-  const router = useRouter()
   const { toast } = useToast()
 
   // Single upload state
@@ -88,9 +119,120 @@ export default function UploadShiurPage() {
   const [bulkUploading, setBulkUploading] = useState(false)
   const [activeTab, setActiveTab] = useState("single")
 
+  // Recent uploads + edit-your-own state
+  const [recentShiurim, setRecentShiurim] = useState<RecentShiur[]>([])
+  const [loadingRecent, setLoadingRecent] = useState(true)
+  const [myShiurim, setMyShiurim] = useState<RecentShiur[]>([])
+  const [loadingMine, setLoadingMine] = useState(true)
+  const [editingShiur, setEditingShiur] = useState<RecentShiur | null>(null)
+  const [editForm, setEditForm] = useState({ title: "", rebbe: "", date: "", description: "", series: "" })
+  const [editTags, setEditTags] = useState<string[]>([])
+  const [savingEdit, setSavingEdit] = useState(false)
+
   useEffect(() => {
     fetchOptions()
+    fetchRecent()
   }, [])
+
+  // Load the user's own uploads once we know who they are.
+  useEffect(() => {
+    if (user?.email) fetchMine()
+  }, [user?.email])
+
+  const refreshLists = () => {
+    fetchRecent()
+    fetchMine()
+  }
+
+  // The 3 most recently uploaded shiurim across the whole site.
+  const fetchRecent = async () => {
+    setLoadingRecent(true)
+    try {
+      const q = query(collection(db, "shiurim"), orderBy("uploadedAt", "desc"), limit(3))
+      const snap = await getDocs(q)
+      const rows: RecentShiur[] = []
+      snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as Omit<RecentShiur, "id">) }))
+      setRecentShiurim(rows)
+    } catch (error) {
+      console.error("Error fetching recent shiurim:", error)
+    } finally {
+      setLoadingRecent(false)
+    }
+  }
+
+  // Every shiur this user uploaded, newest first. (Sorted client-side to avoid
+  // needing a composite Firestore index on uploadedBy + uploadedAt.)
+  const fetchMine = async () => {
+    if (!user?.email) {
+      setMyShiurim([])
+      setLoadingMine(false)
+      return
+    }
+    setLoadingMine(true)
+    try {
+      const q = query(collection(db, "shiurim"), where("uploadedBy", "==", user.email))
+      const snap = await getDocs(q)
+      const rows: RecentShiur[] = []
+      snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as Omit<RecentShiur, "id">) }))
+      rows.sort((a, b) => (b.uploadedAt || "").localeCompare(a.uploadedAt || ""))
+      setMyShiurim(rows)
+    } catch (error) {
+      console.error("Error fetching your shiurim:", error)
+    } finally {
+      setLoadingMine(false)
+    }
+  }
+
+  // A user may only edit shiurim they uploaded themselves.
+  const canEditShiur = (s: RecentShiur) =>
+    !!user?.email && !!s.uploadedBy && s.uploadedBy.toLowerCase() === user.email.toLowerCase()
+
+  const openEditShiur = (s: RecentShiur) => {
+    setEditingShiur(s)
+    setEditForm({
+      title: s.title || "",
+      rebbe: s.rebbe || "",
+      date: s.date || "",
+      description: s.description || "",
+      series: s.series || "",
+    })
+    setEditTags(s.tags || [])
+  }
+
+  const toggleEditTag = (tag: string) => {
+    setEditTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editingShiur) return
+    // Guard again at write time in case state was tampered with.
+    if (!canEditShiur(editingShiur)) {
+      toast({ title: "Not allowed", description: "You can only edit shiurim you uploaded.", variant: "destructive" })
+      return
+    }
+    if (!editForm.title.trim() || !editForm.rebbe.trim()) {
+      toast({ title: "Missing info", description: "Title and Rebbe are required.", variant: "destructive" })
+      return
+    }
+    setSavingEdit(true)
+    try {
+      await updateDoc(doc(db, "shiurim", editingShiur.id), {
+        title: editForm.title.trim(),
+        rebbe: editForm.rebbe,
+        date: editForm.date || null,
+        tags: editTags,
+        description: editForm.description,
+        series: editForm.series || null,
+      })
+      toast({ title: "Shiur updated" })
+      setEditingShiur(null)
+      refreshLists()
+    } catch (error: any) {
+      toast({ title: "Unable to update", description: getUserFriendlyError(error), variant: "destructive" })
+    } finally {
+      setSavingEdit(false)
+    }
+  }
 
   const fetchOptions = async () => {
     try {
@@ -422,10 +564,28 @@ export default function UploadShiurPage() {
 
       setUploadStatus("complete")
       setUploadProgress(100)
-      toast({ title: "Shiur uploaded successfully!", description: "Thank you for sharing." })
+      toast({ title: "Shiur uploaded successfully!", description: "Ready for the next one." })
 
+      // Refresh both lists and reset the form so the user can keep uploading.
+      refreshLists()
       setTimeout(() => {
-        router.push("/shiurim")
+        setFormData({ title: "", rebbe: "", date: "", description: "", series: "" })
+        setSelectedTags([])
+        setAudioFile(null)
+        setPdfFile(null)
+        setAudioBgStatus("idle")
+        setAudioBgUrl(null)
+        setAudioBgProgress(0)
+        setAudioBgError(null)
+        audioPromiseRef.current = null
+        setPdfBgStatus("idle")
+        setPdfBgUrl(null)
+        setPdfBgProgress(0)
+        setPdfBgError(null)
+        pdfPromiseRef.current = null
+        setUploadStatus("idle")
+        setUploadProgress(0)
+        setUploading(false)
       }, 1500)
     } catch (error: any) {
       console.error("Error uploading shiur:", error)
@@ -566,11 +726,12 @@ export default function UploadShiurPage() {
 
     const completed = bulkEntries.filter((e) => e.status === "complete").length
     toast({ title: `Uploaded ${completed} of ${bulkEntries.length} shiurim` })
-    
+
+    // Refresh both lists; stay on the page so the user can upload more.
+    refreshLists()
     if (completed === bulkEntries.length) {
-      setTimeout(() => {
-        router.push("/shiurim")
-      }, 1500)
+      // Clear out the finished entries, ready for the next batch.
+      setBulkEntries([])
     }
   }
 
@@ -1279,7 +1440,249 @@ export default function UploadShiurPage() {
             </div>
           </TabsContent>
         </Tabs>
+
+        {/* Recent uploads across the site. Each user can edit only their own. */}
+        <div className="mt-12">
+          <div className="flex items-center gap-2 mb-4">
+            <Clock className="h-5 w-5 text-gold-dark" />
+            <h2 className="font-serif text-2xl font-bold text-navy">Recently Uploaded</h2>
+          </div>
+          {loadingRecent ? (
+            <div className="flex items-center gap-2 text-navy/60 py-6">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading recent shiurim...
+            </div>
+          ) : recentShiurim.length === 0 ? (
+            <Card className="bg-white border-gold/20">
+              <CardContent className="py-8 text-center text-navy/60">No shiurim uploaded yet.</CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {recentShiurim.map((s) => {
+                const mine = canEditShiur(s)
+                return (
+                  <Card key={s.id} className="bg-white border-2 border-gold/20">
+                    <CardContent className="p-4 flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-semibold text-navy truncate">{s.title || "(untitled)"}</h3>
+                          {mine && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-gold/15 text-gold-dark border border-gold/30">
+                              Your upload
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-navy/70 mt-0.5">
+                          {s.rebbe}
+                          {s.date ? ` · ${new Date(s.date).toLocaleDateString()}` : ""}
+                          {s.series ? ` · ${s.series}` : ""}
+                        </p>
+                        {(s.uploaderName || s.uploadedBy) && (
+                          <p className="text-xs text-navy/40 mt-1">Uploaded by {s.uploaderName || s.uploadedBy}</p>
+                        )}
+                      </div>
+                      {mine ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openEditShiur(s)}
+                          className="border-gold/30 shrink-0"
+                        >
+                          <Pencil className="h-3.5 w-3.5 mr-1.5" />
+                          Edit
+                        </Button>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-1 text-xs text-navy/40 shrink-0"
+                          title="You can only edit shiurim you uploaded"
+                        >
+                          <Lock className="h-3.5 w-3.5" />
+                        </span>
+                      )}
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* All of the current user's own uploads — every one is editable. */}
+        <div className="mt-12">
+          <div className="flex items-center gap-2 mb-4">
+            <User className="h-5 w-5 text-gold-dark" />
+            <h2 className="font-serif text-2xl font-bold text-navy">Your Uploads</h2>
+            {!loadingMine && myShiurim.length > 0 && (
+              <span className="text-sm text-navy/50">({myShiurim.length})</span>
+            )}
+          </div>
+          {loadingMine ? (
+            <div className="flex items-center gap-2 text-navy/60 py-6">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading your shiurim...
+            </div>
+          ) : myShiurim.length === 0 ? (
+            <Card className="bg-white border-gold/20">
+              <CardContent className="py-8 text-center text-navy/60">
+                You haven&apos;t uploaded any shiurim yet.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {myShiurim.map((s) => (
+                <Card key={s.id} className="bg-white border-2 border-gold/20">
+                  <CardContent className="p-4 flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-semibold text-navy truncate">{s.title || "(untitled)"}</h3>
+                      <p className="text-sm text-navy/70 mt-0.5">
+                        {s.rebbe}
+                        {s.date ? ` · ${new Date(s.date).toLocaleDateString()}` : ""}
+                        {s.series ? ` · ${s.series}` : ""}
+                      </p>
+                      {s.uploadedAt && (
+                        <p className="text-xs text-navy/40 mt-1">
+                          Uploaded {new Date(s.uploadedAt).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openEditShiur(s)}
+                      className="border-gold/30 shrink-0"
+                    >
+                      <Pencil className="h-3.5 w-3.5 mr-1.5" />
+                      Edit
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Edit dialog — only reachable for the user's own shiurim. */}
+      <Dialog open={!!editingShiur} onOpenChange={(open) => !open && setEditingShiur(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-navy">Edit Shiur</DialogTitle>
+            <DialogDescription>Update the details of your shiur.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-navy font-semibold">Title *</Label>
+              <Input
+                value={editForm.title}
+                onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                className="border-gold/30"
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label className="text-navy font-semibold">Rebbe *</Label>
+                <Select value={editForm.rebbe} onValueChange={(v) => setEditForm({ ...editForm, rebbe: v })}>
+                  <SelectTrigger className="border-gold/30">
+                    <SelectValue placeholder="Select Rebbe" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {rebbeimOptions.map((r) => (
+                      <SelectItem key={r} value={r}>
+                        {r}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-navy font-semibold">Date</Label>
+                <Input
+                  type="date"
+                  value={editForm.date}
+                  onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
+                  className="border-gold/30"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-navy font-semibold">Series</Label>
+              <Select
+                value={editForm.series || "none"}
+                onValueChange={(v) => setEditForm({ ...editForm, series: v === "none" ? "" : v })}
+              >
+                <SelectTrigger className="border-gold/30">
+                  <SelectValue placeholder="Select Series" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No Series</SelectItem>
+                  {seriesOptions.map((sr) => (
+                    <SelectItem key={sr} value={sr}>
+                      {sr}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-navy font-semibold">Tags</Label>
+              <div className="flex flex-wrap gap-2">
+                {tagsOptions.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => toggleEditTag(tag)}
+                    className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                      editTags.includes(tag)
+                        ? "bg-navy text-cream"
+                        : "bg-cream border border-gold/30 text-navy hover:border-gold"
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+                {tagsOptions.length === 0 && <p className="text-sm text-navy/50">No tags available.</p>}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-navy font-semibold">Description</Label>
+              <Textarea
+                value={editForm.description}
+                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                rows={3}
+                className="border-gold/30"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => setEditingShiur(null)} disabled={savingEdit}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSaveEdit}
+              disabled={savingEdit}
+              className="bg-navy text-cream hover:bg-navy/90"
+            >
+              {savingEdit ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
     </AuthGuard>
   )
