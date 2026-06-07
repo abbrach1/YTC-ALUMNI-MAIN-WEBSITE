@@ -16,6 +16,7 @@ import {
   Megaphone,
   Settings,
   Shield,
+  Smartphone,
   UserCog,
   Users,
   Video,
@@ -57,6 +58,7 @@ export const ADMIN_PAGES: AdminPageDef[] = [
   { href: "/admin/alumni-contacts", label: "Alumni Contacts", icon: Contact },
   { href: "/admin/carousel", label: "Carousel Images", icon: ImageIcon },
   { href: "/admin/alumni-photos", label: "Alumni Photos", icon: Camera },
+  { href: "/admin/app-update", label: "App Update", icon: Smartphone, superAdminOnly: true },
   { href: "/admin/settings", label: "Site Settings", icon: Settings },
 ]
 

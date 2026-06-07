@@ -26,7 +26,8 @@ import {
   query,
   orderBy,
 } from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage"
+import { db, storage } from "@/lib/firebase"
 import { useToast } from "@/hooks/use-toast"
 import { exportRowsToXlsx } from "@/lib/export-xlsx"
 import { CampaignProgress } from "@/components/campaign-progress"
@@ -54,6 +55,9 @@ import {
   Sparkles,
   Loader2,
   TrendingUp,
+  Gift,
+  Upload,
+  X,
 } from "lucide-react"
 
 export default function AdminFundraiserPage() {
@@ -63,6 +67,8 @@ export default function AdminFundraiserPage() {
   const [signups, setSignups] = useState<CampaignSignup[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
+  const [uploadingIncentive, setUploadingIncentive] = useState(false)
+  const [incentiveProgress, setIncentiveProgress] = useState(0)
 
   const fetchSettings = async () => {
     try {
@@ -128,6 +134,49 @@ export default function AdminFundraiserPage() {
       toast({ title: "Error", description: e.message, variant: "destructive" })
     } finally {
       setSavingSettings(false)
+    }
+  }
+
+  const handleIncentiveUpload = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Error", description: "Please choose an image file.", variant: "destructive" })
+      return
+    }
+    setUploadingIncentive(true)
+    setIncentiveProgress(0)
+    try {
+      const timestamp = Date.now()
+      const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_")
+      const storageRef = ref(storage, `incentives/${timestamp}-${safeName}`)
+      const url = await new Promise<string>((resolve, reject) => {
+        const task = uploadBytesResumable(storageRef, file)
+        task.on(
+          "state_changed",
+          (snap) => setIncentiveProgress((snap.bytesTransferred / snap.totalBytes) * 100),
+          reject,
+          async () => resolve(await getDownloadURL(task.snapshot.ref)),
+        )
+      })
+      const next = { ...settings, incentivesImageUrl: url }
+      setSettings(next)
+      await persistSettings(next)
+      toast({ title: "Image uploaded", description: "The incentives picture has been saved." })
+    } catch (e: any) {
+      toast({ title: "Upload failed", description: e.message, variant: "destructive" })
+    } finally {
+      setUploadingIncentive(false)
+      setIncentiveProgress(0)
+    }
+  }
+
+  const handleRemoveIncentive = async () => {
+    const next = { ...settings, incentivesImageUrl: "" }
+    setSettings(next)
+    try {
+      await persistSettings(next)
+      toast({ title: "Image removed" })
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" })
     }
   }
 
@@ -407,6 +456,79 @@ export default function AdminFundraiserPage() {
                 checked={settings.showLinkOnSubmit}
                 onCheckedChange={(v) => setSettings({ ...settings, showLinkOnSubmit: v })}
               />
+            </div>
+          </div>
+
+          {/* Incentives picture shown behind the "See the Incentives" button on the home page. */}
+          <div className="space-y-3 rounded-lg border border-navy/10 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-medium text-navy">
+                  <Gift className="h-4 w-4" />
+                  Incentives Picture
+                </p>
+                <p className="text-xs text-navy/50">
+                  Upload a picture (e.g. a flyer of prizes/incentives). Alumni see a &quot;See the
+                  Incentives&quot; button on the home page that pops it up.
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2 rounded-lg border border-navy/10 px-3 py-1.5">
+                <span className="text-xs font-medium text-navy">
+                  {settings.showIncentives ? "Shown" : "Hidden"}
+                </span>
+                <Switch
+                  checked={settings.showIncentives}
+                  onCheckedChange={(v) => setSettings({ ...settings, showIncentives: v })}
+                />
+              </div>
+            </div>
+
+            {settings.incentivesImageUrl && (
+              <div className="relative w-fit">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={settings.incentivesImageUrl}
+                  alt="Incentives"
+                  className="max-h-48 rounded-lg border border-navy/10 object-contain"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleRemoveIncentive}
+                  className="absolute right-1 top-1 h-7 w-7 rounded-full bg-white/90 p-0 text-navy/60 shadow hover:bg-white hover:text-red-600"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Label
+                htmlFor="incentive-file"
+                className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-navy/20 bg-white px-3 py-2 text-sm font-medium text-navy hover:bg-navy/5"
+              >
+                <Upload className="h-4 w-4" />
+                {settings.incentivesImageUrl ? "Replace image" : "Upload image"}
+              </Label>
+              <input
+                id="incentive-file"
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                disabled={uploadingIncentive}
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void handleIncentiveUpload(f)
+                  e.target.value = ""
+                }}
+              />
+              {uploadingIncentive && (
+                <span className="flex items-center gap-2 text-sm text-navy/60">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Uploading... {Math.round(incentiveProgress)}%
+                </span>
+              )}
             </div>
           </div>
 

@@ -142,6 +142,11 @@ export default function AdminShiurimPage() {
   const [newTag, setNewTag] = useState("")
   const [newSeries, setNewSeries] = useState("")
 
+  // Search within each collection list (Rebbeim / Tags / Series tab)
+  const [rebbeSearch, setRebbeSearch] = useState("")
+  const [tagSearch, setTagSearch] = useState("")
+  const [seriesSearch, setSeriesSearch] = useState("")
+
   // Inline edit state for renaming options
   const [editingRebbe, setEditingRebbe] = useState<string | null>(null)
   const [editingTag, setEditingTag] = useState<string | null>(null)
@@ -876,6 +881,15 @@ export default function AdminShiurimPage() {
   }
 
   const hasActiveFilters = filterSearch || filterRebbe || filterSeries || filterTag || sortBy !== "date"
+
+  // Collection lists filtered by their per-card search box
+  const filteredRebbeim = rebbeimOptions.filter((r) =>
+    r.toLowerCase().includes(rebbeSearch.toLowerCase()),
+  )
+  const filteredTags = tagsOptions.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
+  const filteredSeriesList = seriesOptions.filter((s) =>
+    s.toLowerCase().includes(seriesSearch.toLowerCase()),
+  )
 
   return (
     <div className="space-y-6">
@@ -1616,8 +1630,17 @@ export default function AdminShiurimPage() {
                     <Plus className="h-4 w-4" />
                   </Button>
                 </div>
+                <Input
+                  placeholder="Search rebbeim..."
+                  value={rebbeSearch}
+                  onChange={(e) => setRebbeSearch(e.target.value)}
+                  className="bg-cream/30"
+                />
                 <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {rebbeimOptions.map((rebbe) => {
+                  {filteredRebbeim.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center py-2">No rebbeim found</p>
+                  )}
+                  {filteredRebbeim.map((rebbe) => {
                     const isEditing = editingRebbe === rebbe
                     const count = shiurim.filter((s) => s.rebbe === rebbe).length
                     return (
@@ -1702,8 +1725,17 @@ export default function AdminShiurimPage() {
                     <Plus className="h-4 w-4" />
                   </Button>
                 </div>
+                <Input
+                  placeholder="Search tags..."
+                  value={tagSearch}
+                  onChange={(e) => setTagSearch(e.target.value)}
+                  className="bg-cream/30"
+                />
                 <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {tagsOptions.map((tag) => {
+                  {filteredTags.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center py-2">No tags found</p>
+                  )}
+                  {filteredTags.map((tag) => {
                     const isEditing = editingTag === tag
                     const count = shiurim.filter((s) => Array.isArray(s.tags) && s.tags.includes(tag)).length
                     return (
@@ -1789,8 +1821,17 @@ export default function AdminShiurimPage() {
                     <Plus className="h-4 w-4" />
                   </Button>
                 </div>
+                <Input
+                  placeholder="Search series..."
+                  value={seriesSearch}
+                  onChange={(e) => setSeriesSearch(e.target.value)}
+                  className="bg-cream/30 font-hebrew"
+                />
                 <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {seriesOptions.map((series) => {
+                  {filteredSeriesList.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center py-2">No series found</p>
+                  )}
+                  {filteredSeriesList.map((series) => {
                     const count = shiurim.filter((s) => s.series === series).length
                     const isEditing = editingSeries === series
                     return (

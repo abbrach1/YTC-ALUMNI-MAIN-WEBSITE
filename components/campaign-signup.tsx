@@ -24,7 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Send, ExternalLink, CheckCircle2 } from "lucide-react"
+import { Send, ExternalLink, CheckCircle2, Gift } from "lucide-react"
 import { CampaignProgress } from "@/components/campaign-progress"
 import { CampaignCountdown } from "@/components/campaign-countdown"
 import { doc, getDoc, setDoc, collection, addDoc, getDocs, query, where } from "firebase/firestore"
@@ -50,6 +50,7 @@ export function CampaignSignup() {
 
   const [settings, setSettings] = useState<FundraiserSettings | null>(null)
   const [open, setOpen] = useState(false)
+  const [incentivesOpen, setIncentivesOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [alreadySubmitted, setAlreadySubmitted] = useState(false)
@@ -264,6 +265,16 @@ export function CampaignSignup() {
               >
                 Create Your Page
               </Button>
+              {settings.showIncentives && settings.incentivesImageUrl && (
+                <Button
+                  onClick={() => setIncentivesOpen(true)}
+                  variant="outline"
+                  className="h-12 border-cream/30 bg-transparent px-8 text-base font-semibold text-cream hover:bg-cream/10 hover:text-cream"
+                >
+                  <Gift className="mr-2 h-4 w-4" />
+                  See the Incentives
+                </Button>
+              )}
               {settings.showLinkOnHome && settings.campaignUrl && (
                 <Button
                   asChild
@@ -411,6 +422,23 @@ export function CampaignSignup() {
                 </Button>
               </form>
             </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={incentivesOpen} onOpenChange={setIncentivesOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto p-2 sm:max-w-3xl">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Campaign Incentives</DialogTitle>
+            <DialogDescription>The incentives for this campaign.</DialogDescription>
+          </DialogHeader>
+          {settings.incentivesImageUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={settings.incentivesImageUrl}
+              alt="Campaign incentives"
+              className="h-auto w-full rounded-lg object-contain"
+            />
           )}
         </DialogContent>
       </Dialog>

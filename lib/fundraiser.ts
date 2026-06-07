@@ -44,6 +44,10 @@ export interface FundraiserSettings {
   showLinkOnHome: boolean
   /** Show the "Visit the Campaign" link on the success screen after an alumnus submits. */
   showLinkOnSubmit: boolean
+  /** Show the "See the Incentives" button + picture pop-up on the home-page CTA. */
+  showIncentives: boolean
+  /** Image (uploaded or pasted URL) shown when alumni tap "See the Incentives". */
+  incentivesImageUrl: string
   /** ISO timestamp of the last admin edit. */
   updatedAt?: string
 }
@@ -82,6 +86,8 @@ export const FUNDRAISER_DEFAULTS: FundraiserSettings = {
   defaultMessage: "",
   showLinkOnHome: false,
   showLinkOnSubmit: true,
+  showIncentives: false,
+  incentivesImageUrl: "",
 }
 
 export const CAMPAIGN_STATUS_LABELS: Record<CampaignSignupStatus, string> = {
