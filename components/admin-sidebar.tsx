@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 import { ADMIN_PAGES } from "@/lib/admin-pages"
 
-export function AdminSidebar() {
+// Shared between the desktop rail and the mobile drawer (see AdminHeader).
+export function AdminSidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
   const { isSuperAdmin, allowedAdminPages } = useAuth()
 
@@ -24,7 +25,7 @@ export function AdminSidebar() {
   })
 
   return (
-    <div className="flex h-screen w-64 flex-col border-r border-gold/20 bg-navy">
+    <>
       {/* Header */}
       <div className="border-b border-gold/20 p-6">
         <div className="flex items-center gap-3 mb-2">
@@ -46,6 +47,7 @@ export function AdminSidebar() {
               <li key={item.href}>
                 <Link
                   href={item.href}
+                  onClick={onNavigate}
                   className={cn(
                     "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
                     isActive ? "bg-gold text-navy font-medium" : "text-cream hover:bg-navy/80 hover:text-gold",
@@ -67,12 +69,20 @@ export function AdminSidebar() {
           variant="outline"
           className="w-full border-gold text-cream hover:bg-gold hover:text-navy bg-transparent"
         >
-          <Link href="/">
+          <Link href="/" onClick={onNavigate}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Site
           </Link>
         </Button>
       </div>
+    </>
+  )
+}
+
+export function AdminSidebar() {
+  return (
+    <div className="hidden lg:flex h-full w-64 flex-col border-r border-gold/20 bg-navy">
+      <AdminSidebarContent />
     </div>
   )
 }

@@ -139,7 +139,7 @@ export default function AnnouncementsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-serif text-3xl font-bold text-navy mb-2">Mazel Tovs & Announcements</h1>
           <p className="text-navy/70">Manage announcements displayed on the home page</p>
