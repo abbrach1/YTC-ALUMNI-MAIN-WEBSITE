@@ -43,6 +43,15 @@ import { Loader2, CheckCircle, Plus, X, UploadIcon, Trash2, ListPlus, User, Penc
 
 type UploadStatus = "idle" | "converting-audio" | "uploading-audio" | "uploading-pdf" | "saving" | "complete" | "error"
 
+// YYYY-MM-DD (local time) — matches the <input type="date"> format.
+const fileDateString = (file: File): string => {
+  const d = new Date(file.lastModified)
+  const yr = d.getFullYear()
+  const mo = String(d.getMonth() + 1).padStart(2, "0")
+  const dy = String(d.getDate()).padStart(2, "0")
+  return `${yr}-${mo}-${dy}`
+}
+
 interface RecentShiur {
   id: string
   title: string
@@ -334,6 +343,9 @@ export default function UploadShiurPage() {
       setAudioBgStatus("idle")
       return
     }
+
+    // Auto-fill the date from the file's Last Modified if the user hasn't set one yet.
+    setFormData((prev) => (prev.date ? prev : { ...prev, date: fileDateString(file) }))
 
     // Pre-flight check so we don't start a long upload that will be silently blocked
     const reachable = await checkFirestoreReachable()
@@ -738,6 +750,30 @@ export default function UploadShiurPage() {
   const applyToAllBulk = (field: "rebbe" | "series", value: string) => {
     setBulkEntries(bulkEntries.map(e => ({ ...e, [field]: value })))
     toast({ title: `Applied to all entries` })
+  }
+
+  // Toggle a tag across every bulk entry. If every entry already has it, remove
+  // from all; otherwise add to any that are missing it.
+  const applyTagToAllBulk = (tag: string) => {
+    if (bulkEntries.length === 0) return
+    const allHave = bulkEntries.every((e) => e.tags.includes(tag))
+    setBulkEntries(
+      bulkEntries.map((e) => ({
+        ...e,
+        tags: allHave
+          ? e.tags.filter((t) => t !== tag)
+          : e.tags.includes(tag)
+            ? e.tags
+            : [...e.tags, tag],
+      })),
+    )
+    toast({ title: allHave ? `Removed "${tag}" from all` : `Added "${tag}" to all` })
+  }
+
+  const clearAllBulkTags = () => {
+    if (bulkEntries.length === 0) return
+    setBulkEntries(bulkEntries.map((e) => ({ ...e, tags: [] })))
+    toast({ title: "Cleared tags on all entries" })
   }
 
   if (!user) {
@@ -1195,6 +1231,56 @@ export default function UploadShiurPage() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Tag bulk-apply: click to toggle a tag on every entry. */}
+                    <div className="mt-4 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm text-navy/70">Tags</Label>
+                        {bulkEntries.some((e) => e.tags.length > 0) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearAllBulkTags}
+                            className="h-7 text-xs"
+                          >
+                            Clear all
+                          </Button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {tagsOptions.map((tag) => {
+                          const allHave = bulkEntries.every((e) => e.tags.includes(tag))
+                          const someHave = !allHave && bulkEntries.some((e) => e.tags.includes(tag))
+                          return (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => applyTagToAllBulk(tag)}
+                              className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                                allHave
+                                  ? "bg-navy text-cream"
+                                  : someHave
+                                    ? "bg-gold/20 border border-gold text-navy"
+                                    : "bg-cream border border-gold/30 text-navy hover:border-gold"
+                              }`}
+                              title={
+                                allHave
+                                  ? "Click to remove from all entries"
+                                  : someHave
+                                    ? "On some entries — click to add to all"
+                                    : "Click to add to all entries"
+                              }
+                            >
+                              {tag}
+                            </button>
+                          )
+                        })}
+                        {tagsOptions.length === 0 && (
+                          <p className="text-sm text-navy/50">No tags available.</p>
+                        )}
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
               )}
@@ -1213,6 +1299,7 @@ export default function UploadShiurPage() {
                       ...createEmptyBulkEntry(),
                       audioFile: file,
                       title: baseName,
+                      date: fileDateString(file),
                     }
                   })
                   setBulkEntries((prev) => [...prev, ...newEntries])
@@ -1357,9 +1444,12 @@ export default function UploadShiurPage() {
                               compact
                               selectedFile={entry.audioFile}
                               disabled={bulkUploading}
-                              onFilesSelected={(files) =>
-                                updateBulkEntry(entry.id, { audioFile: files[0] || null })
-                              }
+                              onFilesSelected={(files) => {
+                                const file = files[0] || null
+                                const updates: Partial<BulkShiurEntry> = { audioFile: file }
+                                if (file && !entry.date) updates.date = fileDateString(file)
+                                updateBulkEntry(entry.id, updates)
+                              }}
                             />
                           </div>
                           <div className="space-y-2">
